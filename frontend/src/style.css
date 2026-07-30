@@ -1,0 +1,82 @@
+:root {
+  --primary-color: #87CEEB;
+  --primary-light: #B0E0E6;
+  --primary-dark: #5F9EA0;
+  --background-color: #FFFFFF;
+  --text-color: #333333;
+  --text-secondary: #666666;
+  --border-color: #E5E5E5;
+  --shadow-color: rgba(0, 0, 0, 0.1);
+  --success-color: #67C23A;
+  --warning-color: #E6A23C;
+  --danger-color: #F56C6C;
+  --info-color: #909399;
+}
+
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+body {
+  font-family: 'Helvetica Neue', Helvetica, 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', Arial, sans-serif;
+  background-color: var(--background-color);
+  color: var(--text-color);
+  line-height: 1.6;
+}
+
+#app {
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+}
+
+/* Element Plus 主题覆盖 */
+:root {
+  --el-color-primary: #87CEEB;
+  --el-color-success: #67C23A;
+  --el-color-warning: #E6A23C;
+  --el-color-danger: #F56C6C;
+  --el-color-info: #909399;
+}
+
+/* 卡片样式 */
+.card {
+  background: white;
+  border-radius: 8px;
+  box-shadow: 0 2px 12px var(--shadow-color);
+  padding: 20px;
+  margin-bottom: 20px;
+}
+
+/* 页面容器 */
+.page-container {
+  padding: 20px;
+  max-width: 1200px;
+  margin: 0 auto;
+}
+
+/* 页面标题 */
+.page-header {
+  margin-bottom: 20px;
+  padding-bottom: 10px;
+  border-bottom: 1px solid var(--border-color);
+}
+
+.page-title {
+  font-size: 24px;
+  font-weight: 600;
+  color: var(--text-color);
+}
+
+/* 响应式设计 */
+@media (max-width: 768px) {
+  .page-container {
+    padding: 10px;
+  }
+  
+  .card {
+    padding: 15px;
+  }
+}

@@ -1,0 +1,13 @@
+services:
+  ai-gateway:
+    build: .
+    container_name: ai-gateway
+    ports:
+      - "3301:3301"
+    volumes:
+      - /home/obj/ai_gateway/data:/app/data
+    environment:
+      - TZ=Asia/Shanghai
+      - GIN_MODE=release
+      - JWT_SECRET=${JWT_SECRET:-ai-gateway-secret-key-2024}
+    restart: unless-stopped
