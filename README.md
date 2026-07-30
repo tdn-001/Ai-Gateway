@@ -25,10 +25,10 @@ AI Gateway 是一个兼容 OpenAI API 协议的智能模型网关，作为用户
 **请求链路：**
 
 ```
-用户客户端 → AI Gateway → Nginx → FreeLLM 模型节点池
+用户客户端 → AI Gateway → Nginx（可选） → 模型节点池
 ```
 
-> AI Gateway 只负责 AI 请求处理、SSE 流处理、异常恢复和后台管理。Nginx 负责负载均衡与节点切换，不属于本项目范围。
+> AI Gateway 只负责 AI 请求处理、SSE 流处理、异常恢复和后台管理。可以添加Nginx 负责负载均衡与节点切换，不属于本项目范围。
 
 ---
 
