@@ -6,12 +6,12 @@
           <template #header>
             <div class="card-header">
               <span>Gateway 地址</span>
-              <el-tooltip placement="top" content="请根据应用需要判断是否按 OpenAI 协议标准在后面拼上 /v1 或 /v1/chat/completions。仅支持 OpenAI 协议标准。" raw-content>
-                <span class="help-icon">?</span>
-              </el-tooltip>
             </div>
           </template>
           <div class="gateway-url">
+            <el-tooltip placement="top" content="请根据应用需要判断是否按 OpenAI 协议标准在后面拼上 /v1 或 /v1/chat/completions。仅支持 OpenAI 协议标准。" raw-content>
+              <span class="help-icon">?</span>
+            </el-tooltip>
             <el-tag type="success" size="large">{{ gatewayUrl }}</el-tag>
             <el-button size="small" @click="copyUrl">复制</el-button>
           </div>
@@ -46,19 +46,25 @@
           <div class="stats-section">
             <h4>系统统计</h4>
             <el-row :gutter="16">
-              <el-col :span="8">
+              <el-col :span="6">
                 <div class="stat-item">
                   <div class="stat-value">{{ stats.total_requests }}</div>
                   <div class="stat-label">总请求</div>
                 </div>
               </el-col>
-              <el-col :span="8">
+              <el-col :span="6">
+                <div class="stat-item">
+                  <div class="stat-value">{{ stats.total_retries }}</div>
+                  <div class="stat-label">总重试</div>
+                </div>
+              </el-col>
+              <el-col :span="6">
                 <div class="stat-item">
                   <div class="stat-value">{{ stats.total_keys }}</div>
                   <div class="stat-label">API Keys</div>
                 </div>
               </el-col>
-              <el-col :span="8">
+              <el-col :span="6">
                 <div class="stat-item">
                   <div class="stat-value">{{ activeIPs.length }}</div>
                   <div class="stat-label">活跃IP</div>
@@ -104,9 +110,21 @@
             </div>
           </template>
           
-          <el-table :data="logs" style="width: 100%" size="small">
-            <el-table-column prop="request_id" label="请求ID" width="140" show-overflow-tooltip />
-            <el-table-column prop="client_ip" label="IP" width="120" />
+          <el-table :data="mergedLogs" size="small" style="width: 100%">
+            <el-table-column prop="time" label="时间" width="140" />
+            <el-table-column label="方向" width="70">
+              <template #default="scope">
+                <el-tag :type="scope.row.dir === 'up' ? 'primary' : 'success'" size="small">
+                  {{ scope.row.dir === 'up' ? '上游' : '下游' }}
+                </el-tag>
+              </template>
+            </el-table-column>
+            <el-table-column prop="ip" label="IP" width="115" />
+            <el-table-column label="位置" show-overflow-tooltip>
+              <template #default="scope">
+                {{ mergedLocations[scope.row.ip] || '加载中...' }}
+              </template>
+            </el-table-column>
             <el-table-column prop="status" label="状态" width="70">
               <template #default="scope">
                 <el-tag :type="scope.row.status === 200 ? 'success' : 'danger'" size="small">
@@ -114,18 +132,16 @@
                 </el-tag>
               </template>
             </el-table-column>
-            <el-table-column prop="recover" label="恢复" width="60">
+            <el-table-column label="重试" width="60">
               <template #default="scope">
-                <el-tag v-if="scope.row.recover" type="warning" size="small">是</el-tag>
-                <span v-else>-</span>
+                <span>{{ scope.row.retry === undefined ? '-' : scope.row.retry }}</span>
               </template>
             </el-table-column>
-            <el-table-column prop="cost" label="耗时" width="70">
+            <el-table-column label="耗时" width="70">
               <template #default="scope">
                 {{ scope.row.cost?.toFixed(1) || '-' }}s
               </template>
             </el-table-column>
-            <el-table-column prop="request_time" label="时间" width="140" />
           </el-table>
         </el-card>
       </el-col>
@@ -167,8 +183,11 @@ const config = ref({
 
 const gatewayUrl = window.location.origin
 
-const stats = ref({ total_requests: 0, total_keys: 0 })
+const stats = ref({ total_requests: 0, total_keys: 0, total_retries: 0 })
 const logs = ref<any[]>([])
+const upstreamLogs = ref<any[]>([])
+const mergedLogs = ref<any[]>([])
+const mergedLocations = ref<Record<string, string>>({})
 const activeIPs = ref<any[]>([])
 const trendInterval = ref('hour')
 const trendData = ref<any[]>([])
@@ -180,19 +199,77 @@ const autoRefreshInterval = ref(0)
 const token = localStorage.getItem('token')
 const headers = { Authorization: `Bearer ${token}` }
 
+const buildMergedLogs = () => {
+  const list: any[] = []
+  ;(logs.value || []).forEach((l: any) => {
+    list.push({
+      dir: 'down',
+      time: l.request_time,
+      ip: l.client_ip,
+      status: l.status,
+      retry: l.retry_count,
+      cost: l.cost
+    })
+  })
+  ;(upstreamLogs.value || []).forEach((l: any) => {
+    list.push({
+      dir: 'up',
+      time: l.request_time,
+      ip: l.client_ip,
+      status: l.status,
+      retry: undefined,
+      cost: l.cost
+    })
+  })
+  list.sort((a, b) => (a.time < b.time ? 1 : -1))
+  mergedLogs.value = list.slice(0, 30)
+}
+
+const loadMergedLocations = async () => {
+  const ips = new Set(mergedLogs.value.map((l: any) => l.ip))
+  for (const ip of ips) {
+    if (mergedLocations.value[ip]) continue
+    if (ip === '127.0.0.1' || ip === 'localhost') {
+      mergedLocations.value[ip] = '本地'
+      continue
+    }
+    try {
+      const locRes = await axios.get(`/admin/location/${ip}`, { headers })
+      const data = locRes.data
+      if (data.status === 'success') {
+        mergedLocations.value[ip] = `${data.country} ${data.regionName} ${data.city}`
+      } else {
+        mergedLocations.value[ip] = '未知'
+      }
+    } catch {
+      mergedLocations.value[ip] = '未知'
+    }
+  }
+}
+
+const fetchConfig = async () => {
+  try {
+    const configRes = await axios.get('/admin/config', { headers })
+    config.value = configRes.data
+  } catch (error) {
+    console.error('Failed to fetch config:', error)
+  }
+}
+
 const fetchData = async () => {
   try {
-    const [configRes, statsRes, logsRes, activeRes] = await Promise.all([
-      axios.get('/admin/config', { headers }),
+    const [statsRes, logsRes, upLogsRes, activeRes] = await Promise.all([
       axios.get('/admin/stats', { headers }),
       axios.get('/admin/logs', { headers }),
+      axios.get('/admin/upstream-logs', { headers }),
       axios.get('/admin/stats/active-ips', { headers })
     ])
     
-    config.value = configRes.data
     stats.value = statsRes.data
-    const allLogs = logsRes.data || []
-    logs.value = allLogs.slice(-15).reverse()
+    logs.value = logsRes.data || []
+    upstreamLogs.value = upLogsRes.data || []
+    buildMergedLogs()
+    loadMergedLocations()
     
     const ips = activeRes.data || []
     const ipsWithLocation = await Promise.all(ips.map(async (item: any) => {
@@ -210,6 +287,26 @@ const fetchData = async () => {
     activeIPs.value = ipsWithLocation
   } catch (error) {
     console.error('Failed to fetch data:', error)
+  }
+}
+
+// 轻量刷新：日志面板和趋势图属于高频变化数据，定时/手动刷新只更新这几类接口，
+// 配置、统计等低频数据在页面加载时一次性获取。
+const refreshLogsAndTrend = async () => {
+  try {
+    const [logsRes, upLogsRes, trendRes] = await Promise.all([
+      axios.get('/admin/logs', { headers }),
+      axios.get('/admin/upstream-logs', { headers }),
+      axios.get('/admin/stats/trend', { params: { interval: trendInterval.value, hours: 24 }, headers })
+    ])
+    logs.value = logsRes.data || []
+    upstreamLogs.value = upLogsRes.data || []
+    buildMergedLogs()
+    loadMergedLocations()
+    trendData.value = trendRes.data || []
+    renderChart()
+  } catch (error) {
+    console.error('Failed to refresh logs and trend:', error)
   }
 }
 
@@ -253,7 +350,7 @@ const renderChart = () => {
 }
 
 const manualRefresh = async () => {
-  await Promise.all([fetchData(), fetchTrend()])
+  await refreshLogsAndTrend()
   ElMessage.success('已刷新')
 }
 
@@ -261,7 +358,7 @@ const startAutoRefresh = () => {
   stopAutoRefresh()
   if (autoRefreshInterval.value > 0) {
     autoRefreshTimer = window.setInterval(async () => {
-      await Promise.all([fetchData(), fetchTrend()])
+      await refreshLogsAndTrend()
     }, autoRefreshInterval.value)
   }
 }
@@ -287,6 +384,7 @@ const copyUrl = () => {
 }
 
 onMounted(async () => {
+  await fetchConfig()
   await fetchData()
   await fetchTrend()
   await nextTick()
@@ -305,6 +403,33 @@ onUnmounted(() => {
   display: flex;
   justify-content: space-between;
   align-items: center;
+}
+
+.dashboard :deep(.el-row) {
+  align-items: stretch;
+}
+
+.dashboard :deep(.el-col) {
+  display: flex;
+}
+
+.left-panel,
+.right-panel {
+  width: 100%;
+  height: 100%;
+}
+
+.right-panel :deep(.el-card__body) {
+  display: flex;
+  flex-direction: column;
+  padding: 10px;
+  height: calc(100% - 55px);
+  overflow: hidden;
+}
+
+.right-panel :deep(.el-table) {
+  flex: 1;
+  min-height: 0;
 }
 
 .gateway-url {

@@ -86,6 +86,15 @@ func Load() (*Config, error) {
 	if configInstance.UpstreamTimeout == 0 {
 		configInstance.UpstreamTimeout = 300
 	}
+	if configInstance.MaxRetryTimes == 0 {
+		configInstance.MaxRetryTimes = 5
+	}
+	if configInstance.SessionExpireMinute == 0 {
+		configInstance.SessionExpireMinute = 30
+	}
+	if configInstance.LogKeepDays == 0 {
+		configInstance.LogKeepDays = 5
+	}
 
 	return configInstance, nil
 }

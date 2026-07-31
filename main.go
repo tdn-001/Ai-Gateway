@@ -49,6 +49,7 @@ func main() {
 		admin.POST("/register", auth.Register)
 
 		authorized := admin.Group("")
+		authorized.Use(frontendNavigationMiddleware())
 		authorized.Use(auth.AuthMiddleware())
 		{
 			authorized.GET("/config", config.GetConfig)
@@ -58,6 +59,7 @@ func main() {
 			authorized.PUT("/prompts/:id", config.UpdatePrompt)
 			authorized.DELETE("/prompts/:id", config.DeletePrompt)
 			authorized.GET("/logs", storage.GetLogs)
+			authorized.GET("/upstream-logs", storage.GetUpstreamLogs)
 			authorized.DELETE("/logs", storage.ClearLogs)
 			authorized.GET("/status", gateway.GetStatus)
 			authorized.POST("/password", auth.ChangePassword)

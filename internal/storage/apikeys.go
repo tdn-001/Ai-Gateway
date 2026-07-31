@@ -236,9 +236,17 @@ func GetTotalStats() map[string]interface{} {
 	keys := loadAPIKeysFromFile()
 	totalKeys := len(keys)
 
+	logMutex.RLock()
+	totalRetries := 0
+	for _, l := range logs {
+		totalRetries += l.RetryCount
+	}
+	logMutex.RUnlock()
+
 	return map[string]interface{}{
 		"total_requests": totalRequests,
 		"total_keys":     totalKeys,
+		"total_retries":  totalRetries,
 	}
 }
 

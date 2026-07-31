@@ -20,8 +20,8 @@ type IPLocation struct {
 }
 
 var (
-	ipCache     = make(map[string]*IPLocation)
-	ipCacheMu   sync.RWMutex
+	ipCache   = make(map[string]*IPLocation)
+	ipCacheMu sync.RWMutex
 )
 
 func isPrivateIP(ip string) bool {
@@ -38,6 +38,8 @@ func isPrivateIP(ip string) bool {
 	return false
 }
 
+// GetIPLocation 有 IP 请求归属地时动态查询一次，结果缓存到内存，
+// 同一进程内同一 IP 后续直接命中缓存，不再重复查询。
 func GetIPLocation(ip string) *IPLocation {
 	if isPrivateIP(ip) {
 		return &IPLocation{
@@ -56,32 +58,31 @@ func GetIPLocation(ip string) *IPLocation {
 	}
 	ipCacheMu.RUnlock()
 
+	cacheFail := func() *IPLocation {
+		loc := &IPLocation{IP: ip, Status: "fail"}
+		ipCacheMu.Lock()
+		ipCache[ip] = loc
+		ipCacheMu.Unlock()
+		return loc
+	}
+
 	client := &http.Client{
 		Timeout: 3 * time.Second,
 	}
 
 	resp, err := client.Get("http://ip-api.com/json/" + ip + "?fields=66846721")
 	if err != nil {
-		return &IPLocation{
-			IP:     ip,
-			Status: "fail",
-		}
+		return cacheFail()
 	}
 	defer resp.Body.Close()
 
 	var location IPLocation
 	if err := json.NewDecoder(resp.Body).Decode(&location); err != nil {
-		return &IPLocation{
-			IP:     ip,
-			Status: "fail",
-		}
+		return cacheFail()
 	}
 
 	if location.Status != "success" {
-		return &IPLocation{
-			IP:     ip,
-			Status: "fail",
-		}
+		return cacheFail()
 	}
 
 	ipCacheMu.Lock()

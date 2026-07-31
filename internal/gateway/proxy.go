@@ -39,6 +39,18 @@ func HandleChatCompletions(c *gin.Context) {
 	requestID := fmt.Sprintf("chatcmpl-%d", time.Now().UnixNano())
 	clientIP := c.ClientIP()
 
+	upstreamLog := storage.UpstreamLogEntry{
+		RequestID:   requestID,
+		ClientIP:    clientIP,
+		RequestTime: startTime.Format("2006-01-02 15:04:05"),
+		HTTPStatus:  200,
+		Stream:      false,
+	}
+	defer func() {
+		upstreamLog.Cost = time.Since(startTime).Seconds()
+		storage.AddUpstreamLog(upstreamLog)
+	}()
+
 	apiKey := c.GetHeader("X-API-Key")
 	if apiKey == "" {
 		apiKey = c.Query("api_key")
@@ -51,11 +63,13 @@ func HandleChatCompletions(c *gin.Context) {
 	}
 
 	if apiKey == "" {
+		upstreamLog.HTTPStatus = http.StatusUnauthorized
 		c.JSON(http.StatusUnauthorized, gin.H{"error": "Missing API Key. Please provide X-API-Key header, Authorization Bearer header, or api_key query parameter"})
 		return
 	}
 
 	if !storage.ValidateAPIKey(apiKey) {
+		upstreamLog.HTTPStatus = http.StatusUnauthorized
 		c.JSON(http.StatusUnauthorized, gin.H{"error": "Invalid or disabled API Key"})
 		return
 	}
@@ -63,6 +77,7 @@ func HandleChatCompletions(c *gin.Context) {
 	body, err := io.ReadAll(c.Request.Body)
 	if err != nil {
 		logger.Error("Failed to read request body", zap.Error(err))
+		upstreamLog.HTTPStatus = http.StatusBadRequest
 		c.JSON(http.StatusBadRequest, gin.H{"error": "Failed to read request body"})
 		return
 	}
@@ -70,13 +85,18 @@ func HandleChatCompletions(c *gin.Context) {
 	var req ChatCompletionRequest
 	if err := json.Unmarshal(body, &req); err != nil {
 		logger.Error("Failed to parse request", zap.Error(err))
+		upstreamLog.HTTPStatus = http.StatusBadRequest
 		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid request format"})
 		return
 	}
 
+	upstreamLog.Model = req.Model
+	upstreamLog.Stream = req.Stream
+
 	cfg, err := config.Load()
 	if err != nil {
 		logger.Error("Failed to load config", zap.Error(err))
+		upstreamLog.HTTPStatus = http.StatusInternalServerError
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to load config"})
 		return
 	}
@@ -107,10 +127,7 @@ func HandleChatCompletions(c *gin.Context) {
 
 	storage.CreateSession(session)
 
-	maxRetries := 1
-	if cfg.SSERecoveryEnable {
-		maxRetries = cfg.MaxRetryTimes
-	}
+	maxRetries := cfg.MaxRetryTimes
 
 	var resp *http.Response
 	totalRetries := 0
@@ -149,6 +166,7 @@ func HandleChatCompletions(c *gin.Context) {
 			}
 		}
 		nginxReq.Header.Set("Host", c.Request.Host)
+		nginxReq.Header.Set("Content-Type", "application/json")
 
 		modelKey := storage.GetEnabledModelKey()
 		if modelKey != nil {
@@ -188,6 +206,8 @@ func HandleChatCompletions(c *gin.Context) {
 			RetryCount:   totalRetries,
 		}
 		storage.AddLog(logEntry)
+		upstreamLog.HTTPStatus = http.StatusBadGateway
+		upstreamLog.Error = lastError
 		c.JSON(http.StatusBadGateway, gin.H{"error": "Failed to connect to upstream"})
 		return
 	}
@@ -225,23 +245,24 @@ func HandleChatCompletions(c *gin.Context) {
 			logEntry.HTTPStatus = resp.StatusCode
 			logEntry.Error = fmt.Sprintf("上游返回错误: HTTP %d", resp.StatusCode)
 			logEntry.Result = string(body)
-			if session.PreviousOutput != "" && cfg.SSERecoveryEnable {
-				handleRecovery(c, session, &logEntry, 0)
-			} else {
-				c.Data(resp.StatusCode, "application/json", body)
-			}
+			c.Data(resp.StatusCode, "application/json", body)
 		} else {
 			handleSSEStream(c, resp, session, &logEntry)
 		}
 	} else {
-		handleJSONResponse(c, resp, session, &logEntry, cfg)
+		handleJSONResponse(c, resp, session, &logEntry)
 	}
 
 	storage.AddLog(logEntry)
 	storage.DeleteSession(requestID)
+
+	if logEntry.HTTPStatus != 0 {
+		upstreamLog.HTTPStatus = logEntry.HTTPStatus
+	}
+	upstreamLog.Error = logEntry.Error
 }
 
-func handleJSONResponse(c *gin.Context, resp *http.Response, session *storage.RecoverySession, logEntry *storage.LogEntry, cfg *config.Config) {
+func handleJSONResponse(c *gin.Context, resp *http.Response, session *storage.RecoverySession, logEntry *storage.LogEntry) {
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
 		logger.Error("Failed to read response body", zap.Error(err))
@@ -252,40 +273,6 @@ func handleJSONResponse(c *gin.Context, resp *http.Response, session *storage.Re
 
 	if resp.StatusCode != http.StatusOK {
 		logEntry.Error = fmt.Sprintf("Upstream returned status %d", resp.StatusCode)
-
-		if cfg.SSERecoveryEnable && isRecoverableError(resp.StatusCode) {
-			logger.Info("Got error response, attempting recovery", zap.Int("status", resp.StatusCode))
-			if session.PreviousOutput == "" {
-				for recoveryAttempt := 1; recoveryAttempt <= cfg.MaxRetryTimes; recoveryAttempt++ {
-					logger.Info("Retrying request for error response", zap.Int("attempt", recoveryAttempt))
-					recoveryResp, err := sendRecoveryRequest(cfg, session.OriginalRequest)
-					if err != nil {
-						logger.Error("Recovery request failed", zap.Error(err))
-						continue
-					}
-
-					if recoveryResp.StatusCode == http.StatusOK {
-						recoveryBody, _ := io.ReadAll(recoveryResp.Body)
-						recoveryResp.Body.Close()
-						var response ChatCompletionResponse
-						if err := json.Unmarshal(recoveryBody, &response); err == nil && len(response.Choices) > 0 {
-							logEntry.Recover = true
-							logEntry.RecoverCount = recoveryAttempt
-							logEntry.HTTPStatus = 200
-							if message, ok := response.Choices[0]["message"].(map[string]interface{}); ok {
-								if content, ok := message["content"].(string); ok {
-									logEntry.Result = content
-								}
-							}
-							c.Data(200, "application/json", recoveryBody)
-							return
-						}
-					}
-					recoveryResp.Body.Close()
-				}
-			}
-		}
-
 		c.Data(resp.StatusCode, "application/json", body)
 		return
 	}

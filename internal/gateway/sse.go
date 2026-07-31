@@ -6,6 +6,7 @@ import (
 	"ai-gateway/internal/storage"
 	"bufio"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"strings"
 
@@ -52,7 +53,6 @@ func handleSSEStream(c *gin.Context, resp *http.Response, session *storage.Recov
 
 	var buf sseBuffer
 	var fullContent strings.Builder
-	recoverCount := 0
 	hasOutput := false
 
 	for scanner.Scan() {
@@ -112,11 +112,13 @@ func handleSSEStream(c *gin.Context, resp *http.Response, session *storage.Recov
 		} else {
 			logEntry.ErrorPhase = "stream_init"
 		}
+		buf.reset()
 
 		if hasOutput {
-			handleRecovery(c, session, logEntry, recoverCount)
+			handleRecovery(c, session, logEntry, 0)
+		} else {
+			writeRecoveryTerminate(c, fmt.Sprintf("流式响应中断: %v", scannerErr))
 		}
-		buf.reset()
 		return
 	}
 

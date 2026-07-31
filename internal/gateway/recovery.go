@@ -10,10 +10,28 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/gin-gonic/gin"
 	"go.uber.org/zap"
 )
+
+// writeRecoveryTerminate 在恢复失败时向已开启的 SSE 连接补发错误事件和 [DONE]，
+// 避免客户端一直挂起等待后续数据。
+func writeRecoveryTerminate(c *gin.Context, errMsg string) {
+	if errMsg == "" {
+		errMsg = "recovery failed"
+	}
+	errData, _ := json.Marshal(map[string]interface{}{
+		"error": map[string]interface{}{
+			"message": errMsg,
+			"type":    "server_error",
+		},
+	})
+	c.Writer.Write([]byte("data: " + string(errData) + "\n\n"))
+	c.Writer.Write([]byte("data: [DONE]\n\n"))
+	c.Writer.Flush()
+}
 
 func handleRecovery(c *gin.Context, session *storage.RecoverySession, logEntry *storage.LogEntry, currentRetryCount int) {
 	cfg, err := config.Load()
@@ -24,19 +42,28 @@ func handleRecovery(c *gin.Context, session *storage.RecoverySession, logEntry *
 
 	if !cfg.SSERecoveryEnable {
 		logger.Info("SSE recovery is disabled")
+		writeRecoveryTerminate(c, "SSE recovery is disabled")
 		return
 	}
 
 	if currentRetryCount >= cfg.MaxRetryTimes {
 		logger.Error("Max retry times reached", zap.Int("max", cfg.MaxRetryTimes))
 		logEntry.Error = "Max retry times reached"
+		writeRecoveryTerminate(c, "Max retry times reached")
 		return
+	}
+
+	// 缓冲模式下客户端未收到任何内容，恢复时必须完整重生成，
+	// 否则"接续生成"会让客户端永远看不到开头部分。
+	if cfg.BufferMode {
+		session.RecoverMode = "B"
 	}
 
 	promptMode := fmt.Sprintf("mode_%s", strings.ToLower(session.RecoverMode))
 	prompts := config.GetPromptsByMode(promptMode)
 	if len(prompts) == 0 {
 		logger.Error("No enabled prompt found for mode", zap.String("mode", promptMode))
+		writeRecoveryTerminate(c, fmt.Sprintf("No enabled prompt found for mode %s", promptMode))
 		return
 	}
 	prompt := prompts[0]
@@ -53,6 +80,7 @@ func handleRecovery(c *gin.Context, session *storage.RecoverySession, logEntry *
 	if err != nil {
 		logger.Error("Failed to send recovery request", zap.Error(err))
 		logEntry.Error = err.Error()
+		writeRecoveryTerminate(c, fmt.Sprintf("恢复请求失败: %v", err))
 		return
 	}
 	defer recoveryResp.Body.Close()
@@ -61,6 +89,8 @@ func handleRecovery(c *gin.Context, session *storage.RecoverySession, logEntry *
 		logger.Error("Recovery request returned non-OK status", zap.Int("status", recoveryResp.StatusCode))
 		if currentRetryCount+1 < cfg.MaxRetryTimes {
 			handleRecovery(c, session, logEntry, currentRetryCount+1)
+		} else {
+			writeRecoveryTerminate(c, fmt.Sprintf("恢复请求返回错误: HTTP %d", recoveryResp.StatusCode))
 		}
 		return
 	}
@@ -100,7 +130,13 @@ func sendRecoveryRequest(cfg *config.Config, request map[string]interface{}) (*h
 		return nil, err
 	}
 
-	client := &http.Client{}
+	timeout := cfg.UpstreamTimeout
+	if timeout <= 0 {
+		timeout = 300
+	}
+	client := &http.Client{
+		Timeout: time.Duration(timeout) * time.Second,
+	}
 
 	nginxURL := fmt.Sprintf("%s/v1/chat/completions", cfg.NginxUpstreamURL)
 	req, err := http.NewRequest("POST", nginxURL, bytes.NewReader(body))
@@ -191,6 +227,8 @@ func handleRecoveryResponse(c *gin.Context, resp *http.Response, session *storag
 		cfg, _ := config.Load()
 		if retryCount < cfg.MaxRetryTimes {
 			handleRecovery(c, session, logEntry, retryCount)
+		} else {
+			writeRecoveryTerminate(c, fmt.Sprintf("恢复流式响应中断: %v", scannerErr))
 		}
 		buf.reset()
 		return
