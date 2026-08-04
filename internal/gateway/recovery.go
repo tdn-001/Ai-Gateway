@@ -76,10 +76,11 @@ func handleRecovery(c *gin.Context, session *storage.RecoverySession, logEntry *
 		"stream":   true,
 	}
 
-	recoveryResp, err := sendRecoveryRequest(cfg, recoveryRequest)
+	recoveryResp, err := sendRecoveryRequest(cfg, session, recoveryRequest)
 	if err != nil {
 		logger.Error("Failed to send recovery request", zap.Error(err))
 		logEntry.Error = err.Error()
+		markRecoveryKeyFailure(session)
 		writeRecoveryTerminate(c, fmt.Sprintf("恢复请求失败: %v", err))
 		return
 	}
@@ -87,6 +88,7 @@ func handleRecovery(c *gin.Context, session *storage.RecoverySession, logEntry *
 
 	if recoveryResp.StatusCode != http.StatusOK {
 		logger.Error("Recovery request returned non-OK status", zap.Int("status", recoveryResp.StatusCode))
+		markRecoveryKeyFailure(session)
 		if currentRetryCount+1 < cfg.MaxRetryTimes {
 			handleRecovery(c, session, logEntry, currentRetryCount+1)
 		} else {
@@ -124,10 +126,15 @@ func prepareRecoveryMessages(session *storage.RecoverySession, promptTemplate st
 	return messages
 }
 
-func sendRecoveryRequest(cfg *config.Config, request map[string]interface{}) (*http.Response, error) {
+func sendRecoveryRequest(cfg *config.Config, session *storage.RecoverySession, request map[string]interface{}) (*http.Response, error) {
 	body, err := json.Marshal(request)
 	if err != nil {
 		return nil, err
+	}
+
+	node := storage.GetEnabledModelNode()
+	if node == nil {
+		return nil, fmt.Errorf("no enabled model node")
 	}
 
 	timeout := cfg.UpstreamTimeout
@@ -138,20 +145,33 @@ func sendRecoveryRequest(cfg *config.Config, request map[string]interface{}) (*h
 		Timeout: time.Duration(timeout) * time.Second,
 	}
 
-	nginxURL := fmt.Sprintf("%s/v1/chat/completions", cfg.NginxUpstreamURL)
-	req, err := http.NewRequest("POST", nginxURL, bytes.NewReader(body))
+	upstreamURL := fmt.Sprintf("%s/v1/chat/completions", node.URL)
+	req, err := http.NewRequest("POST", upstreamURL, bytes.NewReader(body))
 	if err != nil {
 		return nil, err
 	}
 
 	req.Header.Set("Content-Type", "application/json")
 
-	modelKey := storage.GetEnabledModelKey()
-	if modelKey != nil {
-		req.Header.Set("Authorization", "Bearer "+modelKey.Key)
+	// 恢复请求沿用同一 key，连续失败 3 次才换下一个 key
+	if session.RecoveryKey == "" {
+		session.RecoveryKey = storage.PickNodeKey()
+		session.RecoveryKeyFails = 0
+	}
+	if session.RecoveryKey != "" {
+		req.Header.Set("Authorization", "Bearer "+session.RecoveryKey)
 	}
 
 	return client.Do(req)
+}
+
+// markRecoveryKeyFailure 记录当前恢复 key 的一次失败，连续失败 3 次后清空以便换 key。
+func markRecoveryKeyFailure(session *storage.RecoverySession) {
+	session.RecoveryKeyFails++
+	if session.RecoveryKeyFails >= 3 {
+		session.RecoveryKey = ""
+		session.RecoveryKeyFails = 0
+	}
 }
 
 func handleRecoveryResponse(c *gin.Context, resp *http.Response, session *storage.RecoverySession, logEntry *storage.LogEntry, retryCount int) {
@@ -223,6 +243,7 @@ func handleRecoveryResponse(c *gin.Context, resp *http.Response, session *storag
 		logger.Error("Recovery SSE scanner error", zap.Error(scannerErr))
 		logEntry.Error = fmt.Sprintf("恢复请求失败: %v", scannerErr)
 		logEntry.ErrorPhase = "recovery"
+		markRecoveryKeyFailure(session)
 
 		cfg, _ := config.Load()
 		if retryCount < cfg.MaxRetryTimes {

@@ -21,7 +21,7 @@
           <div class="config-section">
             <h4>当前配置</h4>
             <el-descriptions :column="1" border size="small">
-              <el-descriptions-item label="上游地址">{{ config.nginx_upstream_url }}</el-descriptions-item>
+              <el-descriptions-item label="模型地址">{{ activeNodeUrl }}</el-descriptions-item>
               <el-descriptions-item label="监听端口">{{ config.listen_port }}</el-descriptions-item>
               <el-descriptions-item label="应用请求超时">{{ config.client_timeout }}秒</el-descriptions-item>
               <el-descriptions-item label="上游请求超时">{{ config.upstream_timeout }}秒</el-descriptions-item>
@@ -181,6 +181,8 @@ const config = ref({
   buffer_mode: false
 })
 
+const activeNodeUrl = ref('')
+
 const gatewayUrl = window.location.origin
 
 const stats = ref({ total_requests: 0, total_keys: 0, total_retries: 0 })
@@ -251,6 +253,10 @@ const fetchConfig = async () => {
   try {
     const configRes = await axios.get('/admin/config', { headers })
     config.value = configRes.data
+    const nodesRes = await axios.get('/admin/modelnodes', { headers })
+    const nodes = nodesRes.data || []
+    const enabled = nodes.find((n: any) => n.enabled)
+    activeNodeUrl.value = enabled ? enabled.url : '-'
   } catch (error) {
     console.error('Failed to fetch config:', error)
   }

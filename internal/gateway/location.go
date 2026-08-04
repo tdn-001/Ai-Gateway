@@ -70,7 +70,7 @@ func GetIPLocation(ip string) *IPLocation {
 		Timeout: 3 * time.Second,
 	}
 
-	resp, err := client.Get("http://ip-api.com/json/" + ip + "?fields=66846721")
+	resp, err := client.Get("http://ip-api.com/json/" + ip + "?lang=zh-CN")
 	if err != nil {
 		return cacheFail()
 	}

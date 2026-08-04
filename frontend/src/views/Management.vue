@@ -4,14 +4,10 @@
     <div class="management-content">
       <div class="section">
         <h3>配置管理</h3>
-        <div class="form-grid">
+          <div class="form-grid">
           <div class="form-group">
             <label>监听端口</label>
             <el-input v-model="config.listen_port" placeholder="3301" />
-          </div>
-          <div class="form-group">
-            <label>上游地址</label>
-            <el-input v-model="config.nginx_upstream_url" placeholder="http://127.0.0.1:8080" />
           </div>
           <div class="form-group">
             <label>应用请求超时(秒)</label>

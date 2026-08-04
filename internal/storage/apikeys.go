@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 )
@@ -35,12 +36,56 @@ var (
 	apiKeyCacheMu sync.RWMutex
 	apiKeyUsage   []APIKeyUsageLog
 	apiKeyUsageMu sync.RWMutex
+	apiKeysDirty  bool
+	apiKeysMu     sync.Mutex
+	stopKeyFlush  chan struct{}
 )
 
 const (
 	apiKeysFile  = "./data/api_keys.json"
-	apiUsageFile = "./data/api_usage.json"
+	apiUsageFile = "./data/api_usage.jsonl"
 )
+
+func init() {
+	stopKeyFlush = make(chan struct{})
+	go periodicAPIKeyFlush()
+}
+
+func periodicAPIKeyFlush() {
+	ticker := time.NewTicker(30 * time.Second)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ticker.C:
+			flushAPIKeysIfDirty()
+		case <-stopKeyFlush:
+			return
+		}
+	}
+}
+
+func flushAPIKeysIfDirty() {
+	apiKeysMu.Lock()
+	if !apiKeysDirty {
+		apiKeysMu.Unlock()
+		return
+	}
+	apiKeysDirty = false
+	apiKeysMu.Unlock()
+
+	apiKeyCacheMu.RLock()
+	keys := make([]APIKey, len(apiKeyCache))
+	copy(keys, apiKeyCache)
+	apiKeyCacheMu.RUnlock()
+
+	saveAPIKeysToFile(keys)
+}
+
+func markAPIKeysDirty() {
+	apiKeysMu.Lock()
+	apiKeysDirty = true
+	apiKeysMu.Unlock()
+}
 
 func GenerateAPIKey() string {
 	bytes := make([]byte, 16)
@@ -108,19 +153,18 @@ func ValidateAPIKey(key string) bool {
 	return false
 }
 
+// UpdateAPIKeyLastUsed 只更新内存缓存，不落盘；由后台协程定期写入 api_keys.json。
 func UpdateAPIKeyLastUsed(key string) {
-	keys := loadAPIKeysFromFile()
-	for i, k := range keys {
+	apiKeyCacheMu.Lock()
+	defer apiKeyCacheMu.Unlock()
+	for i, k := range apiKeyCache {
 		if k.Key == key {
-			keys[i].LastUsedAt = time.Now().Format("2006-01-02 15:04:05")
-			keys[i].RequestCount++
-			saveAPIKeysToFile(keys)
-			apiKeyCacheMu.Lock()
-			apiKeyCache = keys
-			apiKeyCacheMu.Unlock()
-			return
+			apiKeyCache[i].LastUsedAt = time.Now().Format("2006-01-02 15:04:05")
+			apiKeyCache[i].RequestCount++
+			break
 		}
 	}
+	markAPIKeysDirty()
 }
 
 func CreateAPIKey(name string, customKey string) APIKey {
@@ -173,34 +217,76 @@ func ToggleAPIKey(key string, enabled bool) bool {
 }
 
 func GetAllAPIKeys() []APIKey {
-	return loadAPIKeysFromFile()
+	apiKeyCacheMu.RLock()
+	cached := make([]APIKey, len(apiKeyCache))
+	copy(cached, apiKeyCache)
+	apiKeyCacheMu.RUnlock()
+	return cached
 }
 
+// LoadAPIKeyUsage 加载使用日志，兼容旧 json 与新 jsonl 两种格式。
 func LoadAPIKeyUsage() {
 	apiKeyUsageMu.Lock()
 	defer apiKeyUsageMu.Unlock()
 
-	if _, err := os.Stat(apiUsageFile); os.IsNotExist(err) {
+	// 优先加载 jsonl（新格式）
+	if _, err := os.Stat(apiUsageFile); err == nil {
+		data, err := os.ReadFile(apiUsageFile)
+		if err != nil {
+			return
+		}
+		lines := strings.Split(string(data), "\n")
+		for _, line := range lines {
+			line = strings.TrimSpace(line)
+			if line == "" {
+				continue
+			}
+			var entry APIKeyUsageLog
+			if err := json.Unmarshal([]byte(line), &entry); err == nil {
+				apiKeyUsage = append(apiKeyUsage, entry)
+			}
+		}
 		return
 	}
 
-	data, err := os.ReadFile(apiUsageFile)
+	// 迁移：旧格式 api_usage.json → api_usage.jsonl
+	oldFile := "./data/api_usage.json"
+	if _, err := os.Stat(oldFile); err == nil {
+		data, err := os.ReadFile(oldFile)
+		if err == nil {
+			json.Unmarshal(data, &apiKeyUsage)
+		}
+		// 重写为 jsonl
+		os.MkdirAll(filepath.Dir(apiUsageFile), 0755)
+		f, ferr := os.OpenFile(apiUsageFile, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0644)
+		if ferr == nil {
+			for _, entry := range apiKeyUsage {
+				d, _ := json.Marshal(entry)
+				f.Write(d)
+				f.WriteString("\n")
+			}
+			f.Close()
+		}
+		os.Remove(oldFile)
+	}
+}
+
+// AddAPIKeyUsageLog 追加写入内存 + 追加写入 jsonl 文件（O_APPEND），
+// 不再每次全量重写整个文件。
+func AddAPIKeyUsageLog(log APIKeyUsageLog) {
+	apiKeyUsageMu.Lock()
+	apiKeyUsage = append(apiKeyUsage, log)
+	apiKeyUsageMu.Unlock()
+
+	os.MkdirAll(filepath.Dir(apiUsageFile), 0755)
+	data, _ := json.Marshal(log)
+	f, err := os.OpenFile(apiUsageFile, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
 	if err != nil {
 		return
 	}
-
-	json.Unmarshal(data, &apiKeyUsage)
-}
-
-func AddAPIKeyUsageLog(log APIKeyUsageLog) {
-	apiKeyUsageMu.Lock()
-	defer apiKeyUsageMu.Unlock()
-
-	apiKeyUsage = append(apiKeyUsage, log)
-
-	os.MkdirAll(filepath.Dir(apiUsageFile), 0755)
-	data, _ := json.MarshalIndent(apiKeyUsage, "", "  ")
-	os.WriteFile(apiUsageFile, data, 0644)
+	defer f.Close()
+	f.Write(data)
+	f.WriteString("\n")
 }
 
 func GetAPIKeyUsageLogs(key string, page, pageSize int) ([]APIKeyUsageLog, int) {
@@ -230,9 +316,9 @@ func GetAPIKeyUsageLogs(key string, page, pageSize int) ([]APIKeyUsageLog, int) 
 
 func GetTotalStats() map[string]interface{} {
 	apiKeyUsageMu.RLock()
-	defer apiKeyUsageMu.RUnlock()
-
 	totalRequests := len(apiKeyUsage)
+	apiKeyUsageMu.RUnlock()
+
 	keys := loadAPIKeysFromFile()
 	totalKeys := len(keys)
 
@@ -357,11 +443,38 @@ func GetRequestTrend(interval string, hours int) []map[string]interface{} {
 				}
 			}
 			trend = append(trend, map[string]interface{}{
-				"time":  t.Format("2006-01"),
+				"time":  t.Format("01-02"),
 				"count": count,
 			})
 		}
 	}
 
 	return trend
+}
+
+// cleanAPIUsage 清理过期条目并重写 jsonl 文件。
+func cleanAPIUsage(cutoff time.Time) {
+	apiKeyUsageMu.Lock()
+	defer apiKeyUsageMu.Unlock()
+
+	var newUsage []APIKeyUsageLog
+	for _, u := range apiKeyUsage {
+		t, err := time.Parse("2006-01-02 15:04:05", u.RequestTime)
+		if err != nil || t.After(cutoff) {
+			newUsage = append(newUsage, u)
+		}
+	}
+	apiKeyUsage = newUsage
+
+	os.MkdirAll(filepath.Dir(apiUsageFile), 0755)
+	f, err := os.OpenFile(apiUsageFile, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0644)
+	if err != nil {
+		return
+	}
+	defer f.Close()
+	for _, entry := range apiKeyUsage {
+		data, _ := json.Marshal(entry)
+		f.Write(data)
+		f.WriteString("\n")
+	}
 }

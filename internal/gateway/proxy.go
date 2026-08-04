@@ -129,9 +129,19 @@ func HandleChatCompletions(c *gin.Context) {
 
 	maxRetries := cfg.MaxRetryTimes
 
+	node := storage.GetEnabledModelNode()
+	if node == nil {
+		storage.DeleteSession(requestID)
+		upstreamLog.HTTPStatus = http.StatusBadGateway
+		c.JSON(http.StatusBadGateway, gin.H{"error": "No enabled model node"})
+		return
+	}
+
 	var resp *http.Response
 	totalRetries := 0
 	lastError := ""
+	currentKey := storage.PickNodeKey()
+	keyFailures := 0
 
 	for retryCount := 0; retryCount <= maxRetries; retryCount++ {
 		if retryCount > 0 {
@@ -140,7 +150,7 @@ func HandleChatCompletions(c *gin.Context) {
 			time.Sleep(time.Duration(1) * time.Second)
 		}
 
-		nginxURL := fmt.Sprintf("%s/v1/chat/completions", cfg.NginxUpstreamURL)
+		upstreamURL := fmt.Sprintf("%s/v1/chat/completions", node.URL)
 
 		var client *http.Client
 		if req.Stream {
@@ -151,7 +161,7 @@ func HandleChatCompletions(c *gin.Context) {
 			}
 		}
 
-		nginxReq, err := http.NewRequest("POST", nginxURL, bytes.NewReader(body))
+		nginxReq, err := http.NewRequest("POST", upstreamURL, bytes.NewReader(body))
 		if err != nil {
 			logger.Error("Failed to create nginx request", zap.Error(err))
 			lastError = fmt.Sprintf("创建请求失败: %v", err)
@@ -168,15 +178,20 @@ func HandleChatCompletions(c *gin.Context) {
 		nginxReq.Header.Set("Host", c.Request.Host)
 		nginxReq.Header.Set("Content-Type", "application/json")
 
-		modelKey := storage.GetEnabledModelKey()
-		if modelKey != nil {
-			nginxReq.Header.Set("Authorization", "Bearer "+modelKey.Key)
+		if currentKey != "" {
+			nginxReq.Header.Set("Authorization", "Bearer "+currentKey)
 		}
 
 		resp, err = client.Do(nginxReq)
 		if err != nil {
-			logger.Error("Failed to send request to nginx", zap.Error(err))
+			logger.Error("Failed to send request to upstream", zap.Error(err))
 			lastError = fmt.Sprintf("连接上游失败: %v", err)
+			keyFailures++
+			if keyFailures >= 3 {
+				keyFailures = 0
+				currentKey = storage.PickNodeKey()
+				logger.Warn("Key rotated after 3 failures", zap.String("requestID", requestID))
+			}
 			continue
 		}
 
@@ -185,6 +200,12 @@ func HandleChatCompletions(c *gin.Context) {
 		}
 
 		lastError = fmt.Sprintf("上游返回可恢复错误: HTTP %d", resp.StatusCode)
+		keyFailures++
+		if keyFailures >= 3 {
+			keyFailures = 0
+			currentKey = storage.PickNodeKey()
+			logger.Warn("Key rotated after 3 failures", zap.String("requestID", requestID))
+		}
 		if retryCount < maxRetries {
 			resp.Body.Close()
 			logger.Warn("Got recoverable error, will retry", zap.Int("status", resp.StatusCode), zap.Int("retry", retryCount+1))

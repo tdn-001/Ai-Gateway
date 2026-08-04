@@ -24,6 +24,7 @@ func main() {
 	}
 
 	storage.Init(cfg.SessionExpireMinute, cfg.LogKeepDays)
+	storage.LoadModelNodes()
 	auth.Init()
 	storage.LoadAPIKeys()
 	storage.LoadAPIKeyUsage()
@@ -141,31 +142,48 @@ func main() {
 				c.JSON(200, location)
 			})
 
-			authorized.GET("/modelkeys", func(c *gin.Context) {
-				c.JSON(200, storage.GetAllModelKeys())
+			authorized.GET("/modelnodes", func(c *gin.Context) {
+				c.JSON(200, storage.GetAllModelNodes())
 			})
-			authorized.POST("/modelkeys", func(c *gin.Context) {
+			authorized.POST("/modelnodes", func(c *gin.Context) {
 				var req struct {
 					Name string `json:"name" binding:"required"`
-					Key  string `json:"key" binding:"required"`
+					URL  string `json:"url" binding:"required"`
 				}
 				if err := c.ShouldBindJSON(&req); err != nil {
 					c.JSON(400, gin.H{"error": err.Error()})
 					return
 				}
-				mk := storage.CreateModelKey(req.Name, req.Key)
-				c.JSON(201, mk)
+				node := storage.CreateModelNode(req.Name, req.URL)
+				c.JSON(201, node)
 			})
-			authorized.DELETE("/modelkeys/:key", func(c *gin.Context) {
-				key := c.Param("key")
-				if storage.DeleteModelKey(key) {
-					c.JSON(200, gin.H{"message": "Key deleted"})
+			authorized.PUT("/modelnodes/:id", func(c *gin.Context) {
+				id := c.Param("id")
+				var req struct {
+					Name string              `json:"name"`
+					URL  string              `json:"url"`
+					Keys []storage.ModelKey  `json:"keys"`
+				}
+				if err := c.ShouldBindJSON(&req); err != nil {
+					c.JSON(400, gin.H{"error": err.Error()})
+					return
+				}
+				if storage.UpdateModelNode(id, req.Name, req.URL, req.Keys) {
+					c.JSON(200, gin.H{"message": "Node updated"})
 				} else {
-					c.JSON(404, gin.H{"error": "Key not found"})
+					c.JSON(404, gin.H{"error": "Node not found"})
 				}
 			})
-			authorized.PUT("/modelkeys/:key/toggle", func(c *gin.Context) {
-				key := c.Param("key")
+			authorized.DELETE("/modelnodes/:id", func(c *gin.Context) {
+				id := c.Param("id")
+				if storage.DeleteModelNode(id) {
+					c.JSON(200, gin.H{"message": "Node deleted"})
+				} else {
+					c.JSON(404, gin.H{"error": "Node not found"})
+				}
+			})
+			authorized.PUT("/modelnodes/:id/toggle", func(c *gin.Context) {
+				id := c.Param("id")
 				var req struct {
 					Enabled bool `json:"enabled"`
 				}
@@ -173,10 +191,51 @@ func main() {
 					c.JSON(400, gin.H{"error": err.Error()})
 					return
 				}
-				if storage.ToggleModelKey(key, req.Enabled) {
+				if storage.ToggleModelNode(id, req.Enabled) {
+					c.JSON(200, gin.H{"message": "Node updated"})
+				} else {
+					c.JSON(400, gin.H{"error": "至少需保留一个启用节点"})
+				}
+			})
+			authorized.POST("/modelnodes/:id/keys", func(c *gin.Context) {
+				nodeID := c.Param("id")
+				var req struct {
+					Name string `json:"name"`
+					Key  string `json:"key" binding:"required"`
+				}
+				if err := c.ShouldBindJSON(&req); err != nil {
+					c.JSON(400, gin.H{"error": err.Error()})
+					return
+				}
+				if storage.CreateModelKey(nodeID, req.Name, req.Key) {
+					c.JSON(201, gin.H{"message": "Key created"})
+				} else {
+					c.JSON(404, gin.H{"error": "Node not found"})
+				}
+			})
+			authorized.DELETE("/modelnodes/:id/keys/:keyId", func(c *gin.Context) {
+				nodeID := c.Param("id")
+				keyID := c.Param("keyId")
+				if storage.DeleteModelKey(nodeID, keyID) {
+					c.JSON(200, gin.H{"message": "Key deleted"})
+				} else {
+					c.JSON(404, gin.H{"error": "Not found"})
+				}
+			})
+			authorized.PUT("/modelnodes/:id/keys/:keyId/toggle", func(c *gin.Context) {
+				nodeID := c.Param("id")
+				keyID := c.Param("keyId")
+				var req struct {
+					Enabled bool `json:"enabled"`
+				}
+				if err := c.ShouldBindJSON(&req); err != nil {
+					c.JSON(400, gin.H{"error": err.Error()})
+					return
+				}
+				if storage.ToggleModelKey(nodeID, keyID, req.Enabled) {
 					c.JSON(200, gin.H{"message": "Key updated"})
 				} else {
-					c.JSON(404, gin.H{"error": "Key not found"})
+					c.JSON(404, gin.H{"error": "Not found"})
 				}
 			})
 		}

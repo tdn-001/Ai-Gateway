@@ -28,7 +28,7 @@
           </el-menu-item>
           <el-menu-item index="/admin/modelkeys">
             <el-icon><Connection /></el-icon>
-            <span>模型节点 Keys</span>
+            <span>模型节点</span>
           </el-menu-item>
           <el-menu-item index="/admin/logs">
             <el-icon><List /></el-icon>
@@ -98,7 +98,7 @@ const activeMenu = computed(() => {
 const currentRoute = computed(() => {
   const routeMap: Record<string, string> = {
     '/admin/management': '管理',
-    '/admin/modelkeys': '模型节点 Keys',
+    '/admin/modelkeys': '模型节点',
     '/admin/apikeys': 'API Keys',
     '/admin/logs': '日志管理'
   }

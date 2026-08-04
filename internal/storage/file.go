@@ -13,13 +13,15 @@ import (
 )
 
 type RecoverySession struct {
-	RequestID      string                 `json:"request_id"`
-	ClientIP       string                 `json:"client_ip"`
-	UserQuestion   string                 `json:"user_question"`
+	RequestID       string                 `json:"request_id"`
+	ClientIP        string                 `json:"client_ip"`
+	UserQuestion    string                 `json:"user_question"`
 	OriginalRequest map[string]interface{} `json:"original_request"`
-	PreviousOutput string                 `json:"previous_output"`
-	RecoverMode    string                 `json:"recover_mode"`
-	CreateTime     time.Time              `json:"create_time"`
+	PreviousOutput  string                 `json:"previous_output"`
+	RecoverMode     string                 `json:"recover_mode"`
+	CreateTime      time.Time              `json:"create_time"`
+	RecoveryKey     string                 `json:"recovery_key,omitempty"`
+	RecoveryKeyFails int                   `json:"recovery_key_fails,omitempty"`
 }
 
 type LogEntry struct {
@@ -57,6 +59,9 @@ var (
 	upstreamMutex  sync.RWMutex
 	sessionExpire  int
 	logKeepDays    int
+	logChan        = make(chan LogEntry, 4096)
+	upstreamLogCh  = make(chan UpstreamLogEntry, 4096)
+	stopLogFlush   chan struct{}
 )
 
 const (
@@ -72,15 +77,26 @@ func Init(expireMinutes, keepDays int) {
 	sessionExpire = expireMinutes
 	logKeepDays = keepDays
 
-	// 启动会话清理协程
+	stopLogFlush = make(chan struct{})
+	go logFlushWorker()
 	go cleanExpiredSessions()
-
-	// 启动日志清理协程
 	go cleanExpiredLogs()
 
-	// 加载现有日志
 	loadLogs()
 	loadUpstreamLogs()
+}
+
+func logFlushWorker() {
+	for {
+		select {
+		case entry := <-logChan:
+			saveLog(entry)
+		case entry := <-upstreamLogCh:
+			saveUpstreamLog(entry)
+		case <-stopLogFlush:
+			return
+		}
+	}
 }
 
 // 会话管理
@@ -130,13 +146,17 @@ func cleanExpiredSessions() {
 	}
 }
 
-// 日志管理
+// AddLog 追加内存（同步，快速）+ 异步落盘，不阻塞请求关键路径。
 func AddLog(entry LogEntry) {
 	logMutex.Lock()
-	defer logMutex.Unlock()
-
 	logs = append(logs, entry)
-	saveLog(entry)
+	logMutex.Unlock()
+
+	select {
+	case logChan <- entry:
+	default:
+		// channel 满时丢弃异步写，内存已有记录，不会丢数据
+	}
 }
 
 func GetLogs(c *gin.Context) {
@@ -164,13 +184,16 @@ func ClearLogs(c *gin.Context) {
 	c.JSON(200, gin.H{"message": "Logs cleared"})
 }
 
-// 上游日志管理
+// AddUpstreamLog 追加内存（同步，快速）+ 异步落盘，不阻塞请求关键路径。
 func AddUpstreamLog(entry UpstreamLogEntry) {
 	upstreamMutex.Lock()
-	defer upstreamMutex.Unlock()
-
 	upstreamLogs = append(upstreamLogs, entry)
-	saveUpstreamLog(entry)
+	upstreamMutex.Unlock()
+
+	select {
+	case upstreamLogCh <- entry:
+	default:
+	}
 }
 
 func GetUpstreamLogs(c *gin.Context) {
@@ -359,19 +382,3 @@ func cleanOldLogFiles(cutoff time.Time, dir string, pattern string) {
 	}
 }
 
-func cleanAPIUsage(cutoff time.Time) {
-	apiKeyUsageMu.Lock()
-	defer apiKeyUsageMu.Unlock()
-
-	var newUsage []APIKeyUsageLog
-	for _, u := range apiKeyUsage {
-		t, err := time.Parse("2006-01-02 15:04:05", u.RequestTime)
-		if err != nil || t.After(cutoff) {
-			newUsage = append(newUsage, u)
-		}
-	}
-	apiKeyUsage = newUsage
-
-	data, _ := json.MarshalIndent(apiKeyUsage, "", "  ")
-	os.WriteFile(apiUsageFile, data, 0644)
-}

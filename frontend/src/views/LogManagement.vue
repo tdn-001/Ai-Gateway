@@ -2,9 +2,18 @@
   <div class="log-management">
     <div class="page-header">
       <h1 class="page-title">日志管理</h1>
-      <el-button type="danger" @click="handleClearLogs">
-        清空日志
-      </el-button>
+      <div class="header-actions">
+        <el-button type="primary" @click="manualRefresh">手动刷新</el-button>
+        <el-select v-model="autoRefreshInterval" size="default" style="width: 120px; margin-left: 8px;" @change="onRefreshIntervalChange">
+          <el-option label="10秒刷新" :value="10000" />
+          <el-option label="30秒刷新" :value="30000" />
+          <el-option label="1分钟刷新" :value="60000" />
+          <el-option label="不刷新" :value="0" />
+        </el-select>
+        <el-button type="danger" style="margin-left: 8px;" @click="handleClearLogs">
+          清空日志
+        </el-button>
+      </div>
     </div>
 
     <el-row :gutter="16">
@@ -93,7 +102,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted } from 'vue'
+import { ref, onMounted, onUnmounted } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import axios from 'axios'
 
@@ -127,6 +136,34 @@ const logs = ref<LogEntry[]>([])
 const upstreamLogs = ref<UpstreamLogEntry[]>([])
 const loading = ref(false)
 const ipLocations = ref<Record<string, string>>({})
+
+let autoRefreshTimer: number | null = null
+const autoRefreshInterval = ref(0)
+
+const manualRefresh = async () => {
+  await fetchLogs()
+  ElMessage.success('已刷新')
+}
+
+const startAutoRefresh = () => {
+  stopAutoRefresh()
+  if (autoRefreshInterval.value > 0) {
+    autoRefreshTimer = window.setInterval(async () => {
+      await fetchLogs()
+    }, autoRefreshInterval.value)
+  }
+}
+
+const stopAutoRefresh = () => {
+  if (autoRefreshTimer !== null) {
+    clearInterval(autoRefreshTimer)
+    autoRefreshTimer = null
+  }
+}
+
+const onRefreshIntervalChange = () => {
+  startAutoRefresh()
+}
 
 const fetchLogs = async () => {
   loading.value = true
@@ -209,6 +246,10 @@ const handleClearLogs = async () => {
 onMounted(() => {
   fetchLogs()
 })
+
+onUnmounted(() => {
+  stopAutoRefresh()
+})
 </script>
 
 <style scoped>
@@ -217,6 +258,11 @@ onMounted(() => {
   justify-content: space-between;
   align-items: center;
   margin-bottom: 20px;
+}
+
+.header-actions {
+  display: flex;
+  align-items: center;
 }
 
 .card-header {
