@@ -1,6 +1,7 @@
 services:
   ai-gateway:
     build: .
+    image: ai-gateway:latest
     container_name: ai-gateway
     ports:
       - "3301:3301"
