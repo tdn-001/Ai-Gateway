@@ -56,7 +56,29 @@ AI Gateway 是一个兼容 OpenAI API 协议的智能模型网关，作为用户
 - Node.js 20+（构建前端，仅在本地开发时需要）
 - Docker & Docker Compose（容器部署）
 
-### 方式一：Docker Compose 部署（推荐）
+### 方式一：直接拉取镜像运行（最简）
+
+```bash
+# 拉取最新镜像
+docker pull ghcr.io/tdn-001/ai-gateway:latest
+
+# 创建数据目录
+mkdir -p data
+
+# 启动容器
+docker run -d \
+  --name ai-gateway \
+  -p 3301:3301 \
+  -v $(pwd)/data:/app/data \
+  -e TZ=Asia/Shanghai \
+  -e GIN_MODE=release \
+  -e JWT_SECRET=your-secret-key \
+  ghcr.io/tdn-001/ai-gateway:latest
+```
+
+访问 `http://localhost:3301` 进入后台管理，首次访问会提示注册管理员账号。
+
+### 方式二：Docker Compose 部署（推荐）
 
 ```bash
 # 克隆仓库
@@ -66,7 +88,8 @@ cd Ai-Gateway
 # 创建数据目录
 mkdir -p data
 
-# 构建并启动
+# 修改 docker-compose.yml 中的 image 为 GHCR 地址（可选）
+# 或使用本地构建：
 docker compose up -d --build
 
 # 查看日志
@@ -78,7 +101,7 @@ docker compose down
 
 访问 `http://localhost:3301` 进入后台管理，首次访问会提示注册管理员账号。
 
-### 方式二：本地编译运行
+### 方式三：本地编译运行
 
 **Linux / macOS：**
 
@@ -116,7 +139,7 @@ go build -o ai-gateway.exe .
 .\ai-gateway.exe
 ```
 
-### 方式三：直接运行（开发模式）
+### 方式四：直接运行（开发模式）
 
 ```bash
 # 先构建前端
