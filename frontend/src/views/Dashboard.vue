@@ -224,7 +224,7 @@ const buildMergedLogs = () => {
     })
   })
   list.sort((a, b) => (a.time < b.time ? 1 : -1))
-  mergedLogs.value = list.slice(0, 30)
+  mergedLogs.value = list.slice(0, 20)
 }
 
 const loadMergedLocations = async () => {
