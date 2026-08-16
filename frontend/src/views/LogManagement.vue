@@ -64,10 +64,15 @@
             <el-table-column prop="request_id" label="请求ID" min-width="150" show-overflow-tooltip />
             <el-table-column prop="request_time" label="时间" min-width="170" />
             <el-table-column prop="client_ip" label="IP" min-width="100" show-overflow-tooltip />
-            <el-table-column prop="status" label="状态" width="75">
+            <el-table-column label="状态" width="130">
               <template #default="scope">
-                <el-tag :type="getStatusType(scope.row.status)" size="small">
-                  {{ scope.row.status }}
+                <el-tooltip v-if="scope.row.status_chain && scope.row.status_chain.includes('->')" :content="scope.row.status_chain" placement="top">
+                  <el-tag :type="getStatusType(scope.row.status)" size="small">
+                    {{ truncateChain(scope.row.status_chain) }}
+                  </el-tag>
+                </el-tooltip>
+                <el-tag v-else :type="getStatusType(scope.row.status)" size="small">
+                  {{ scope.row.status_chain || scope.row.status }}
                 </el-tag>
               </template>
             </el-table-column>
@@ -111,6 +116,7 @@ interface LogEntry {
   client_ip: string
   request_time: string
   status: number
+  status_chain: string
   recover: boolean
   recover_count: number
   retry_count: number
@@ -220,6 +226,12 @@ const getStatusType = (status: number) => {
   if (status >= 200 && status < 300) return 'success'
   if (status >= 400 && status < 500) return 'warning'
   return 'danger'
+}
+
+const truncateChain = (chain: string): string => {
+  const parts = chain.split('->')
+  if (parts.length <= 5) return chain
+  return `${parts[0]}->${parts[1]}->${parts[2]}->...->${parts[parts.length - 2]}->${parts[parts.length - 1]}`
 }
 
 const handleClearLogs = async () => {

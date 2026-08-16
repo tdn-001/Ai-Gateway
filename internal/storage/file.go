@@ -30,6 +30,7 @@ type LogEntry struct {
 	RequestTime   string  `json:"request_time"`
 	Cost          float64 `json:"cost"`
 	HTTPStatus    int     `json:"status"`
+	StatusChain   string  `json:"status_chain"`
 	Recover       bool    `json:"recover"`
 	RecoverCount  int     `json:"recover_count"`
 	Error         string  `json:"error"`

@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -42,6 +43,17 @@ func isRecoverableError(statusCode int) bool {
 		}
 	}
 	return false
+}
+
+func joinStatusChain(chain []int) string {
+	if len(chain) == 0 {
+		return ""
+	}
+	parts := make([]string, len(chain))
+	for i, v := range chain {
+		parts[i] = fmt.Sprintf("%d", v)
+	}
+	return strings.Join(parts, "->")
 }
 
 func HandleChatCompletions(c *gin.Context) {
@@ -152,6 +164,7 @@ func HandleChatCompletions(c *gin.Context) {
 	lastError := ""
 	currentKey := storage.PickNodeKey()
 	keyFailures := 0
+	statusChain := []int{}
 
 	for retryCount := 0; retryCount <= maxRetries; retryCount++ {
 		if retryCount > 0 {
@@ -196,6 +209,7 @@ func HandleChatCompletions(c *gin.Context) {
 		if err != nil {
 			logger.Error("Failed to send request to upstream", zap.Error(err))
 			lastError = fmt.Sprintf("连接上游失败: %v", err)
+			statusChain = append(statusChain, 0)
 			keyFailures++
 			if keyFailures >= 3 {
 				keyFailures = 0
@@ -206,9 +220,11 @@ func HandleChatCompletions(c *gin.Context) {
 		}
 
 		if !isRecoverableError(resp.StatusCode) {
+			statusChain = append(statusChain, resp.StatusCode)
 			break
 		}
 
+		statusChain = append(statusChain, resp.StatusCode)
 		lastError = fmt.Sprintf("上游返回可恢复错误: HTTP %d", resp.StatusCode)
 		keyFailures++
 		if keyFailures >= 3 {
@@ -232,6 +248,7 @@ func HandleChatCompletions(c *gin.Context) {
 			RequestTime:  startTime.Format("2006-01-02 15:04:05"),
 			Cost:         time.Since(startTime).Seconds(),
 			HTTPStatus:   502,
+			StatusChain:  joinStatusChain(statusChain),
 			Error:        lastError,
 			ErrorPhase:   "connect",
 			RetryCount:   totalRetries,
@@ -251,6 +268,7 @@ func HandleChatCompletions(c *gin.Context) {
 		RequestTime:  startTime.Format("2006-01-02 15:04:05"),
 		Cost:         cost,
 		HTTPStatus:   resp.StatusCode,
+		StatusChain:  joinStatusChain(statusChain),
 		Recover:      false,
 		RecoverCount: 0,
 		Error:        "",
