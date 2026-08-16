@@ -6,7 +6,7 @@ services:
     ports:
       - "3301:3301"
     volumes:
-      - /home/obj/ai_gateway/data:/app/data
+      - ../data:/app/data
     environment:
       - TZ=Asia/Shanghai
       - GIN_MODE=release
