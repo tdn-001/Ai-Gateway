@@ -23,6 +23,17 @@
             <label>最大重试次数</label>
             <el-input-number v-model="config.max_retry_times" :min="1" :max="20" />
           </div>
+          <div class="form-group status-codes-group">
+            <label>自动重试状态码</label>
+            <div class="status-codes-tip">上游返回以下状态码时自动重试（默认勾选为自动恢复的状态码），未勾选的状态码将直接透传给客户端。</div>
+            <el-checkbox-group v-model="config.recoverable_status_codes">
+              <div class="status-code-checkboxes">
+                <el-checkbox v-for="code in statusCodeOptions" :key="code.value" :value="code.value">
+                  {{ code.value }} {{ code.label }}
+                </el-checkbox>
+              </div>
+            </el-checkbox-group>
+          </div>
           <div class="form-group">
             <label>Session 过期(分钟)</label>
             <el-input-number v-model="config.session_expire_minute" :min="5" :max="1440" />
@@ -128,7 +139,27 @@ const config = ref<any>({
   session_expire_minute: 30,
   log_keep_days: 5,
   buffer_mode: false,
+  recoverable_status_codes: [429, 500, 502, 503, 504],
 })
+
+const statusCodeOptions = [
+  { value: 400, label: 'Bad Request 请求错误' },
+  { value: 401, label: 'Unauthorized 未授权' },
+  { value: 403, label: 'Forbidden 禁止访问' },
+  { value: 404, label: 'Not Found 未找到' },
+  { value: 408, label: 'Request Timeout 请求超时' },
+  { value: 409, label: 'Conflict 冲突' },
+  { value: 413, label: 'Payload Too Large 负载过大' },
+  { value: 415, label: 'Unsupported Media Type 不支持的媒体类型' },
+  { value: 422, label: 'Unprocessable Entity 无法处理实体' },
+  { value: 429, label: 'Too Many Requests 请求过多' },
+  { value: 500, label: 'Internal Server Error 服务器内部错误' },
+  { value: 501, label: 'Not Implemented 未实现' },
+  { value: 502, label: 'Bad Gateway 网关错误' },
+  { value: 503, label: 'Service Unavailable 服务不可用' },
+  { value: 504, label: 'Gateway Timeout 网关超时' },
+  { value: 507, label: 'Insufficient Storage 存储空间不足' },
+]
 const prompts = ref<any[]>([])
 const savingConfig = ref(false)
 const savingPrompt = ref(false)
@@ -306,6 +337,19 @@ const deletePrompt = async (id: string) => {
   font-size: 12px;
   color: #909399;
   margin-top: 4px;
+}
+.status-codes-group {
+  grid-column: 1 / -1;
+}
+.status-codes-tip {
+  font-size: 12px;
+  color: #909399;
+  margin-bottom: 8px;
+}
+.status-code-checkboxes {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 4px 12px;
 }
 .help-icon {
   display: inline-flex;

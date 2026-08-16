@@ -12,16 +12,17 @@ import (
 )
 
 type Config struct {
-	ListenPort           string `json:"listen_port"`
-	NginxUpstreamURL     string `json:"nginx_upstream_url"`
-	ClientTimeout        int    `json:"client_timeout"`
-	UpstreamTimeout      int    `json:"upstream_timeout"`
-	SSERecoveryEnable    bool   `json:"sse_recovery_enable"`
-	DefaultRecoveryMode  string `json:"default_recovery_mode"`
-	MaxRetryTimes        int    `json:"max_retry_times"`
-	SessionExpireMinute  int    `json:"session_expire_minute"`
-	LogKeepDays          int    `json:"log_keep_days"`
-	BufferMode           bool   `json:"buffer_mode"`
+	ListenPort             string `json:"listen_port"`
+	NginxUpstreamURL       string `json:"nginx_upstream_url"`
+	ClientTimeout          int    `json:"client_timeout"`
+	UpstreamTimeout        int    `json:"upstream_timeout"`
+	SSERecoveryEnable      bool   `json:"sse_recovery_enable"`
+	DefaultRecoveryMode    string `json:"default_recovery_mode"`
+	MaxRetryTimes          int    `json:"max_retry_times"`
+	SessionExpireMinute    int    `json:"session_expire_minute"`
+	LogKeepDays            int    `json:"log_keep_days"`
+	BufferMode             bool   `json:"buffer_mode"`
+	RecoverableStatusCodes []int  `json:"recoverable_status_codes"`
 }
 
 type Prompt struct {
@@ -53,16 +54,17 @@ func Load() (*Config, error) {
 
 	if _, err := os.Stat(configFile); os.IsNotExist(err) {
 		configInstance = &Config{
-			ListenPort:          "3301",
-			NginxUpstreamURL:    "http://127.0.0.1:8080",
-			ClientTimeout:       300,
-			UpstreamTimeout:     300,
-			SSERecoveryEnable:   true,
-			DefaultRecoveryMode: "B",
-			MaxRetryTimes:       5,
-			SessionExpireMinute: 30,
-			LogKeepDays:         5,
-			BufferMode:          false,
+			ListenPort:             "3301",
+			NginxUpstreamURL:       "http://127.0.0.1:8080",
+			ClientTimeout:          300,
+			UpstreamTimeout:        300,
+			SSERecoveryEnable:      true,
+			DefaultRecoveryMode:    "B",
+			MaxRetryTimes:          5,
+			SessionExpireMinute:    30,
+			LogKeepDays:            5,
+			BufferMode:             false,
+			RecoverableStatusCodes: []int{429, 500, 502, 503, 504},
 		}
 		if err := saveConfig(configInstance); err != nil {
 			return nil, fmt.Errorf("failed to save default config: %w", err)
@@ -95,6 +97,9 @@ func Load() (*Config, error) {
 	if configInstance.LogKeepDays == 0 {
 		configInstance.LogKeepDays = 5
 	}
+	if len(configInstance.RecoverableStatusCodes) == 0 {
+		configInstance.RecoverableStatusCodes = []int{429, 500, 502, 503, 504}
+	}
 
 	return configInstance, nil
 }
@@ -110,6 +115,10 @@ func saveConfig(cfg *Config) error {
 func UpdateConfig(newCfg *Config) error {
 	configMutex.Lock()
 	defer configMutex.Unlock()
+
+	if len(newCfg.RecoverableStatusCodes) == 0 {
+		newCfg.RecoverableStatusCodes = []int{429, 500, 502, 503, 504}
+	}
 
 	if err := saveConfig(newCfg); err != nil {
 		return err

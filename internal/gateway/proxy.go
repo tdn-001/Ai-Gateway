@@ -31,7 +31,17 @@ type ChatCompletionResponse struct {
 }
 
 func isRecoverableError(statusCode int) bool {
-	return statusCode == 429 || statusCode == 500 || statusCode == 502 || statusCode == 503 || statusCode == 504
+	cfg, err := config.Load()
+	if err != nil {
+		// 配置加载失败时回退到硬编码默认值，保证服务稳定
+		return statusCode == 429 || statusCode == 500 || statusCode == 502 || statusCode == 503 || statusCode == 504
+	}
+	for _, code := range cfg.RecoverableStatusCodes {
+		if statusCode == code {
+			return true
+		}
+	}
+	return false
 }
 
 func HandleChatCompletions(c *gin.Context) {
