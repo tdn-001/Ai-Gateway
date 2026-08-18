@@ -290,16 +290,17 @@ func HandleChatCompletions(c *gin.Context) {
 
 	if req.Stream {
 		if resp.StatusCode != http.StatusOK {
-			body, _ := io.ReadAll(resp.Body)
+			respBody, _ := io.ReadAll(resp.Body)
 			logEntry.HTTPStatus = resp.StatusCode
 			logEntry.Error = fmt.Sprintf("上游返回错误: HTTP %d", resp.StatusCode)
-			logEntry.Result = string(body)
-			c.Data(resp.StatusCode, "application/json", body)
+			logEntry.RequestBody = string(body)
+			logEntry.Result = string(respBody)
+			c.Data(resp.StatusCode, "application/json", respBody)
 		} else {
 			handleSSEStream(c, resp, session, &logEntry)
 		}
 	} else {
-		handleJSONResponse(c, resp, session, &logEntry)
+		handleJSONResponse(c, resp, session, &logEntry, string(body))
 	}
 
 	storage.AddLog(logEntry)
@@ -311,7 +312,7 @@ func HandleChatCompletions(c *gin.Context) {
 	upstreamLog.Error = logEntry.Error
 }
 
-func handleJSONResponse(c *gin.Context, resp *http.Response, session *storage.RecoverySession, logEntry *storage.LogEntry) {
+func handleJSONResponse(c *gin.Context, resp *http.Response, session *storage.RecoverySession, logEntry *storage.LogEntry, requestBody string) {
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
 		logger.Error("Failed to read response body", zap.Error(err))
@@ -322,6 +323,7 @@ func handleJSONResponse(c *gin.Context, resp *http.Response, session *storage.Re
 
 	if resp.StatusCode != http.StatusOK {
 		logEntry.Error = fmt.Sprintf("Upstream returned status %d", resp.StatusCode)
+		logEntry.RequestBody = requestBody
 		c.Data(resp.StatusCode, "application/json", body)
 		return
 	}

@@ -46,25 +46,31 @@
           <div class="stats-section">
             <h4>系统统计</h4>
             <el-row :gutter="16">
-              <el-col :span="6">
+              <el-col :span="5">
                 <div class="stat-item">
                   <div class="stat-value">{{ stats.total_requests }}</div>
                   <div class="stat-label">总请求</div>
                 </div>
               </el-col>
-              <el-col :span="6">
+              <el-col :span="5">
+                <div class="stat-item">
+                  <div class="stat-value highlight">{{ stats.today_requests }}</div>
+                  <div class="stat-label">今日请求</div>
+                </div>
+              </el-col>
+              <el-col :span="5">
                 <div class="stat-item">
                   <div class="stat-value">{{ stats.total_retries }}</div>
                   <div class="stat-label">总重试</div>
                 </div>
               </el-col>
-              <el-col :span="6">
+              <el-col :span="5">
                 <div class="stat-item">
                   <div class="stat-value">{{ stats.total_keys }}</div>
                   <div class="stat-label">API Keys</div>
                 </div>
               </el-col>
-              <el-col :span="6">
+              <el-col :span="4">
                 <div class="stat-item">
                   <div class="stat-value">{{ activeIPs.length }}</div>
                   <div class="stat-label">活跃IP</div>
@@ -185,7 +191,7 @@ const activeNodeUrl = ref('')
 
 const gatewayUrl = window.location.origin
 
-const stats = ref({ total_requests: 0, total_keys: 0, total_retries: 0 })
+const stats = ref({ total_requests: 0, today_requests: 0, total_keys: 0, total_retries: 0 })
 const logs = ref<any[]>([])
 const upstreamLogs = ref<any[]>([])
 const mergedLogs = ref<any[]>([])
@@ -463,6 +469,10 @@ onUnmounted(() => {
   font-size: 24px;
   font-weight: 600;
   color: #87CEEB;
+}
+
+.stat-value.highlight {
+  color: #E6A23C;
 }
 
 .stat-label {

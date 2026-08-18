@@ -31,6 +31,7 @@ type LogEntry struct {
 	Cost          float64 `json:"cost"`
 	HTTPStatus    int     `json:"status"`
 	StatusChain   string  `json:"status_chain"`
+	RequestBody   string  `json:"request_body,omitempty"`
 	Recover       bool    `json:"recover"`
 	RecoverCount  int     `json:"recover_count"`
 	Error         string  `json:"error"`

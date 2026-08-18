@@ -317,6 +317,13 @@ func GetAPIKeyUsageLogs(key string, page, pageSize int) ([]APIKeyUsageLog, int) 
 func GetTotalStats() map[string]interface{} {
 	apiKeyUsageMu.RLock()
 	totalRequests := len(apiKeyUsage)
+	todayStr := time.Now().Format("2006-01-02")
+	todayRequests := 0
+	for _, log := range apiKeyUsage {
+		if strings.HasPrefix(log.RequestTime, todayStr) {
+			todayRequests++
+		}
+	}
 	apiKeyUsageMu.RUnlock()
 
 	keys := loadAPIKeysFromFile()
@@ -331,6 +338,7 @@ func GetTotalStats() map[string]interface{} {
 
 	return map[string]interface{}{
 		"total_requests": totalRequests,
+		"today_requests": todayRequests,
 		"total_keys":     totalKeys,
 		"total_retries":  totalRetries,
 	}

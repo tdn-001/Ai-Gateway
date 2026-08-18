@@ -44,6 +44,9 @@ func main() {
 		v1.POST("/chat/completions", gateway.HandleChatCompletions)
 	}
 
+	// 兼容不带 /v1 前缀的客户端（如 opencode 直接拼 /chat/completions）
+	r.POST("/chat/completions", gateway.HandleChatCompletions)
+
 	admin := r.Group("/admin")
 	{
 		admin.POST("/login", auth.Login)
