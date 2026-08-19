@@ -56,6 +56,124 @@ func joinStatusChain(chain []int) string {
 	return strings.Join(parts, "->")
 }
 
+func estimateTokens(data []byte) int {
+	return len(data) / 3
+}
+
+func parseRounds(messages []map[string]interface{}) ([]map[string]interface{}, [][]map[string]interface{}) {
+	var systemMsgs []map[string]interface{}
+	var rounds [][]map[string]interface{}
+	var currentRound []map[string]interface{}
+
+	for _, msg := range messages {
+		role, _ := msg["role"].(string)
+		if role == "system" {
+			systemMsgs = append(systemMsgs, msg)
+			continue
+		}
+		if role == "user" {
+			if len(currentRound) > 0 {
+				rounds = append(rounds, currentRound)
+			}
+			currentRound = []map[string]interface{}{msg}
+		} else {
+			currentRound = append(currentRound, msg)
+		}
+	}
+	if len(currentRound) > 0 {
+		rounds = append(rounds, currentRound)
+	}
+	return systemMsgs, rounds
+}
+
+func estimateRoundSize(round []map[string]interface{}) int {
+	data, _ := json.Marshal(round)
+	return len(data)
+}
+
+func trimLargeRequest(body []byte, cfg *config.Config) []byte {
+	if !cfg.RequestTrimmingEnable {
+		return body
+	}
+
+	maxSize := cfg.MaxRequestSize
+	if maxSize <= 0 {
+		maxSize = 102400
+	}
+	maxMessages := cfg.MaxMessages
+	if maxMessages <= 0 {
+		maxMessages = 100
+	}
+	keepRounds := cfg.KeepRecentRounds
+	if keepRounds <= 0 {
+		keepRounds = 20
+	}
+
+	var req map[string]interface{}
+	if err := json.Unmarshal(body, &req); err != nil {
+		return body
+	}
+
+	messagesRaw, ok := req["messages"].([]interface{})
+	if !ok || len(messagesRaw) == 0 {
+		return body
+	}
+
+	var messages []map[string]interface{}
+	for _, m := range messagesRaw {
+		if msg, ok := m.(map[string]interface{}); ok {
+			messages = append(messages, msg)
+		}
+	}
+
+	systemMsgs, rounds := parseRounds(messages)
+	totalMsgs := len(messages)
+
+	systemSize, _ := json.Marshal(systemMsgs)
+	estimatedTokens := estimateTokens(body)
+
+	needTrim := len(body) > maxSize || estimatedTokens > maxSize/3 || totalMsgs > maxMessages
+
+	if !needTrim || len(rounds) <= 1 {
+		return body
+	}
+
+	for len(rounds) > 1 {
+		totalSize := len(systemSize) + len(body)
+		if totalSize <= maxSize && len(rounds) <= keepRounds {
+			break
+		}
+
+		rounds = rounds[1:]
+
+		var keptMsgs []map[string]interface{}
+		keptMsgs = append(keptMsgs, systemMsgs...)
+		for _, r := range rounds {
+			keptMsgs = append(keptMsgs, r...)
+		}
+
+		req["messages"] = keptMsgs
+		newBody, err := json.Marshal(req)
+		if err != nil {
+			break
+		}
+
+		body = newBody
+		estimatedTokens = estimateTokens(body)
+		totalMsgs = len(keptMsgs)
+	}
+
+	logger.Info("Request trimmed",
+		zap.Int("original_size", len(body)),
+		zap.Int("new_size", len(body)),
+		zap.Int("original_messages", totalMsgs),
+		zap.Int("remaining_rounds", len(rounds)),
+		zap.Int("estimated_tokens", estimateTokens(body)),
+	)
+
+	return body
+}
+
 func HandleChatCompletions(c *gin.Context) {
 	startTime := time.Now()
 	requestID := fmt.Sprintf("chatcmpl-%d", time.Now().UnixNano())
@@ -120,6 +238,14 @@ func HandleChatCompletions(c *gin.Context) {
 		logger.Error("Failed to load config", zap.Error(err))
 		upstreamLog.HTTPStatus = http.StatusInternalServerError
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to load config"})
+		return
+	}
+
+	body = trimLargeRequest(body, cfg)
+	if err := json.Unmarshal(body, &req); err != nil {
+		logger.Error("Failed to parse trimmed request", zap.Error(err))
+		upstreamLog.HTTPStatus = http.StatusBadRequest
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid request format after trimming"})
 		return
 	}
 

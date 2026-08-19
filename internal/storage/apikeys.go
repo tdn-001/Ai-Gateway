@@ -331,8 +331,12 @@ func GetTotalStats() map[string]interface{} {
 
 	logMutex.RLock()
 	totalRetries := 0
+	todayRetries := 0
 	for _, l := range logs {
 		totalRetries += l.RetryCount
+		if strings.HasPrefix(l.RequestTime, todayStr) {
+			todayRetries += l.RetryCount
+		}
 	}
 	logMutex.RUnlock()
 
@@ -341,6 +345,7 @@ func GetTotalStats() map[string]interface{} {
 		"today_requests": todayRequests,
 		"total_keys":     totalKeys,
 		"total_retries":  totalRetries,
+		"today_retries":  todayRetries,
 	}
 }
 

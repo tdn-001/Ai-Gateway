@@ -46,25 +46,31 @@
           <div class="stats-section">
             <h4>系统统计</h4>
             <el-row :gutter="16">
-              <el-col :span="5">
+              <el-col :span="4">
                 <div class="stat-item">
                   <div class="stat-value">{{ stats.total_requests }}</div>
                   <div class="stat-label">总请求</div>
                 </div>
               </el-col>
-              <el-col :span="5">
+              <el-col :span="4">
                 <div class="stat-item">
                   <div class="stat-value highlight">{{ stats.today_requests }}</div>
                   <div class="stat-label">今日请求</div>
                 </div>
               </el-col>
-              <el-col :span="5">
+              <el-col :span="4">
                 <div class="stat-item">
                   <div class="stat-value">{{ stats.total_retries }}</div>
                   <div class="stat-label">总重试</div>
                 </div>
               </el-col>
-              <el-col :span="5">
+              <el-col :span="4">
+                <div class="stat-item">
+                  <div class="stat-value highlight">{{ stats.today_retries }}</div>
+                  <div class="stat-label">今日重试</div>
+                </div>
+              </el-col>
+              <el-col :span="4">
                 <div class="stat-item">
                   <div class="stat-value">{{ stats.total_keys }}</div>
                   <div class="stat-label">API Keys</div>
@@ -191,7 +197,7 @@ const activeNodeUrl = ref('')
 
 const gatewayUrl = window.location.origin
 
-const stats = ref({ total_requests: 0, today_requests: 0, total_keys: 0, total_retries: 0 })
+const stats = ref({ total_requests: 0, today_requests: 0, total_keys: 0, total_retries: 0, today_retries: 0 })
 const logs = ref<any[]>([])
 const upstreamLogs = ref<any[]>([])
 const mergedLogs = ref<any[]>([])
@@ -306,11 +312,13 @@ const fetchData = async () => {
 // 配置、统计等低频数据在页面加载时一次性获取。
 const refreshLogsAndTrend = async () => {
   try {
-    const [logsRes, upLogsRes, trendRes] = await Promise.all([
+    const [statsRes, logsRes, upLogsRes, trendRes] = await Promise.all([
+      axios.get('/admin/stats', { headers }),
       axios.get('/admin/logs', { headers }),
       axios.get('/admin/upstream-logs', { headers }),
       axios.get('/admin/stats/trend', { params: { interval: trendInterval.value, hours: 24 }, headers })
     ])
+    stats.value = statsRes.data
     logs.value = logsRes.data || []
     upstreamLogs.value = upLogsRes.data || []
     buildMergedLogs()

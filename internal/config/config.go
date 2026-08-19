@@ -23,6 +23,10 @@ type Config struct {
 	LogKeepDays            int    `json:"log_keep_days"`
 	BufferMode             bool   `json:"buffer_mode"`
 	RecoverableStatusCodes []int  `json:"recoverable_status_codes"`
+	RequestTrimmingEnable  bool   `json:"request_trimming_enable"`
+	MaxRequestSize         int    `json:"max_request_size"`
+	MaxMessages            int    `json:"max_messages"`
+	KeepRecentRounds     int    `json:"keep_recent_rounds"`
 }
 
 type Prompt struct {
@@ -65,6 +69,10 @@ func Load() (*Config, error) {
 			LogKeepDays:            5,
 			BufferMode:             false,
 			RecoverableStatusCodes: []int{429, 500, 502, 503, 504},
+			RequestTrimmingEnable:  true,
+			MaxRequestSize:         102400,
+			MaxMessages:            100,
+			KeepRecentRounds:     20,
 		}
 		if err := saveConfig(configInstance); err != nil {
 			return nil, fmt.Errorf("failed to save default config: %w", err)
@@ -100,6 +108,15 @@ func Load() (*Config, error) {
 	if len(configInstance.RecoverableStatusCodes) == 0 {
 		configInstance.RecoverableStatusCodes = []int{429, 500, 502, 503, 504}
 	}
+	if configInstance.MaxRequestSize == 0 {
+		configInstance.MaxRequestSize = 102400
+	}
+	if configInstance.MaxMessages == 0 {
+		configInstance.MaxMessages = 100
+	}
+	if configInstance.KeepRecentRounds == 0 {
+		configInstance.KeepRecentRounds = 20
+	}
 
 	return configInstance, nil
 }
@@ -118,6 +135,15 @@ func UpdateConfig(newCfg *Config) error {
 
 	if len(newCfg.RecoverableStatusCodes) == 0 {
 		newCfg.RecoverableStatusCodes = []int{429, 500, 502, 503, 504}
+	}
+	if newCfg.MaxRequestSize == 0 {
+		newCfg.MaxRequestSize = 102400
+	}
+	if newCfg.MaxMessages == 0 {
+		newCfg.MaxMessages = 100
+	}
+	if newCfg.KeepRecentRounds == 0 {
+		newCfg.KeepRecentRounds = 20
 	}
 
 	if err := saveConfig(newCfg); err != nil {
