@@ -62,6 +62,30 @@
               <el-option label="模式B-完整重生成" value="B" />
             </el-select>
           </div>
+          <div class="form-group">
+            <label>
+              请求裁剪
+              <el-tooltip placement="top" content="当客户端发送的请求体过大（如 opencode 长会话累积大量消息）时，自动裁剪旧消息，保留 system 提示和最近的对话上下文，避免因请求过大被上游拒绝（400）。" raw-content>
+                <span class="help-icon">?</span>
+              </el-tooltip>
+            </label>
+            <el-switch v-model="config.request_trimming_enable" />
+          </div>
+          <div class="form-group" v-if="config.request_trimming_enable">
+            <label>最大请求体(KB)</label>
+            <el-input-number v-model="config.max_request_size_kb" :min="10" :max="10240" />
+            <div class="form-tip">超过此大小的请求将被自动裁剪（默认 100KB）</div>
+          </div>
+          <div class="form-group" v-if="config.request_trimming_enable">
+            <label>最大消息条数</label>
+            <el-input-number v-model="config.max_messages" :min="5" :max="1000" />
+            <div class="form-tip">消息总数超限时自动裁剪旧消息（默认 100 条）</div>
+          </div>
+          <div class="form-group" v-if="config.request_trimming_enable">
+            <label>保留最近轮次数</label>
+            <el-input-number v-model="config.keep_recent_rounds" :min="1" :max="100" />
+            <div class="form-tip">裁剪时保留的最近交互轮次数（默认20轮，每轮=用户提问+AI回复+工具调用）</div>
+          </div>
         </div>
         <el-button type="primary" @click="saveConfig" :loading="savingConfig">保存配置</el-button>
       </div>
@@ -140,6 +164,10 @@ const config = ref<any>({
   log_keep_days: 5,
   buffer_mode: false,
   recoverable_status_codes: [429, 500, 502, 503, 504],
+  request_trimming_enable: true,
+  max_request_size_kb: 100,
+  max_messages: 100,
+  keep_recent_rounds: 20,
 })
 
 const statusCodeOptions = [
@@ -185,7 +213,9 @@ onMounted(async () => {
       axios.get('/admin/config'),
       axios.get('/admin/prompts'),
     ])
-    config.value = configRes.data
+    const cfg = configRes.data
+    cfg.max_request_size_kb = Math.round((cfg.max_request_size || 102400) / 1024)
+    config.value = cfg
     prompts.value = promptsRes.data
   } catch (err: any) {
     if (err.response?.status === 401) return
@@ -196,7 +226,10 @@ onMounted(async () => {
 const saveConfig = async () => {
   savingConfig.value = true
   try {
-    await axios.put('/admin/config', config.value)
+    const payload = { ...config.value }
+    payload.max_request_size = (payload.max_request_size_kb || 100) * 1024
+    delete payload.max_request_size_kb
+    await axios.put('/admin/config', payload)
     ElMessage.success('配置已保存')
   } catch (err: any) {
     ElMessage.error(err.response?.data?.error || '保存失败')
