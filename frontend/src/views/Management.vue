@@ -72,9 +72,9 @@
             <el-switch v-model="config.request_trimming_enable" />
           </div>
           <div class="form-group" v-if="config.request_trimming_enable">
-            <label>最大请求体(KB)</label>
-            <el-input-number v-model="config.max_request_size_kb" :min="10" :max="10240" />
-            <div class="form-tip">超过此大小的请求将被自动裁剪（默认 100KB）</div>
+            <label>最大输入Token数(K)</label>
+            <el-input-number v-model="config.max_input_tokens_k" :min="32" :max="2048" />
+            <div class="form-tip">超过此 Token 数的请求将被自动裁剪（默认 100K tokens，范围 32K~2M）</div>
           </div>
           <div class="form-group" v-if="config.request_trimming_enable">
             <label>最大消息条数</label>
@@ -165,7 +165,7 @@ const config = ref<any>({
   buffer_mode: false,
   recoverable_status_codes: [429, 500, 502, 503, 504],
   request_trimming_enable: true,
-  max_request_size_kb: 100,
+  max_input_tokens_k: 100,
   max_messages: 100,
   keep_recent_rounds: 20,
 })
@@ -214,7 +214,7 @@ onMounted(async () => {
       axios.get('/admin/prompts'),
     ])
     const cfg = configRes.data
-    cfg.max_request_size_kb = Math.round((cfg.max_request_size || 102400) / 1024)
+    cfg.max_input_tokens_k = Math.round((cfg.max_input_tokens || 102400) / 1024)
     config.value = cfg
     prompts.value = promptsRes.data
   } catch (err: any) {
@@ -227,8 +227,8 @@ const saveConfig = async () => {
   savingConfig.value = true
   try {
     const payload = { ...config.value }
-    payload.max_request_size = (payload.max_request_size_kb || 100) * 1024
-    delete payload.max_request_size_kb
+    payload.max_input_tokens = (payload.max_input_tokens_k || 100) * 1024
+    delete payload.max_input_tokens_k
     await axios.put('/admin/config', payload)
     ElMessage.success('配置已保存')
   } catch (err: any) {

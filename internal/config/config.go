@@ -24,7 +24,7 @@ type Config struct {
 	BufferMode             bool   `json:"buffer_mode"`
 	RecoverableStatusCodes []int  `json:"recoverable_status_codes"`
 	RequestTrimmingEnable  bool   `json:"request_trimming_enable"`
-	MaxRequestSize         int    `json:"max_request_size"`
+	MaxInputTokens         int    `json:"max_input_tokens"`
 	MaxMessages            int    `json:"max_messages"`
 	KeepRecentRounds     int    `json:"keep_recent_rounds"`
 }
@@ -70,7 +70,7 @@ func Load() (*Config, error) {
 			BufferMode:             false,
 			RecoverableStatusCodes: []int{429, 500, 502, 503, 504},
 			RequestTrimmingEnable:  true,
-			MaxRequestSize:         102400,
+			MaxInputTokens:         102400,
 			MaxMessages:            100,
 			KeepRecentRounds:     20,
 		}
@@ -108,8 +108,8 @@ func Load() (*Config, error) {
 	if len(configInstance.RecoverableStatusCodes) == 0 {
 		configInstance.RecoverableStatusCodes = []int{429, 500, 502, 503, 504}
 	}
-	if configInstance.MaxRequestSize == 0 {
-		configInstance.MaxRequestSize = 102400
+	if configInstance.MaxInputTokens == 0 {
+		configInstance.MaxInputTokens = 102400
 	}
 	if configInstance.MaxMessages == 0 {
 		configInstance.MaxMessages = 100
@@ -136,8 +136,8 @@ func UpdateConfig(newCfg *Config) error {
 	if len(newCfg.RecoverableStatusCodes) == 0 {
 		newCfg.RecoverableStatusCodes = []int{429, 500, 502, 503, 504}
 	}
-	if newCfg.MaxRequestSize == 0 {
-		newCfg.MaxRequestSize = 102400
+	if newCfg.MaxInputTokens == 0 {
+		newCfg.MaxInputTokens = 102400
 	}
 	if newCfg.MaxMessages == 0 {
 		newCfg.MaxMessages = 100

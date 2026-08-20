@@ -86,19 +86,14 @@ func parseRounds(messages []map[string]interface{}) ([]map[string]interface{}, [
 	return systemMsgs, rounds
 }
 
-func estimateRoundSize(round []map[string]interface{}) int {
-	data, _ := json.Marshal(round)
-	return len(data)
-}
-
 func trimLargeRequest(body []byte, cfg *config.Config) []byte {
 	if !cfg.RequestTrimmingEnable {
 		return body
 	}
 
-	maxSize := cfg.MaxRequestSize
-	if maxSize <= 0 {
-		maxSize = 102400
+	maxTokens := cfg.MaxInputTokens
+	if maxTokens <= 0 {
+		maxTokens = 102400
 	}
 	maxMessages := cfg.MaxMessages
 	if maxMessages <= 0 {
@@ -129,18 +124,16 @@ func trimLargeRequest(body []byte, cfg *config.Config) []byte {
 	systemMsgs, rounds := parseRounds(messages)
 	totalMsgs := len(messages)
 
-	systemSize, _ := json.Marshal(systemMsgs)
 	estimatedTokens := estimateTokens(body)
 
-	needTrim := len(body) > maxSize || estimatedTokens > maxSize/3 || totalMsgs > maxMessages
+	needTrim := estimatedTokens > maxTokens || totalMsgs > maxMessages
 
 	if !needTrim || len(rounds) <= 1 {
 		return body
 	}
 
 	for len(rounds) > 1 {
-		totalSize := len(systemSize) + len(body)
-		if totalSize <= maxSize && len(rounds) <= keepRounds {
+		if estimatedTokens <= maxTokens && len(rounds) <= keepRounds {
 			break
 		}
 
