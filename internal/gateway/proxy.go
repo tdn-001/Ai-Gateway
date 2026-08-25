@@ -57,7 +57,41 @@ func joinStatusChain(chain []int) string {
 }
 
 func estimateTokens(data []byte) int {
-	return len(data) / 3
+	// 粗略 token 估算：CJK 字符每个约 1~2 token（取 1.5），其他字符约 4 字符/token。
+	// 相比 len(data)/3 更贴近真实 token 数，避免中英文请求被过度或不足裁剪。
+	cjkChars := 0
+	otherChars := 0
+	for _, r := range string(data) {
+		if isCJKChar(r) {
+			cjkChars++
+		} else {
+			otherChars++
+		}
+	}
+	return cjkChars*3/2 + otherChars/4
+}
+
+func isCJKChar(r rune) bool {
+	return (r >= 0x4E00 && r <= 0x9FFF) || // CJK 统一表意文字
+		(r >= 0x3400 && r <= 0x4DBF) || // CJK 扩展 A
+		(r >= 0x3000 && r <= 0x303F) || // CJK 标点
+		(r >= 0xFF00 && r <= 0xFFEF) // 全角字符
+}
+
+// 保证重建后的消息序列以 system 或 user 开头，丢弃裁剪后悬挂在开头的 assistant/tool 消息
+func sanitizeMessageHead(messages []map[string]interface{}) []map[string]interface{} {
+	start := 0
+	for start < len(messages) {
+		role, _ := messages[start]["role"].(string)
+		if role == "system" || role == "user" {
+			break
+		}
+		start++
+	}
+	if start >= len(messages) {
+		return nil
+	}
+	return messages[start:]
 }
 
 func parseRounds(messages []map[string]interface{}) ([]map[string]interface{}, [][]map[string]interface{}) {
@@ -95,14 +129,6 @@ func trimLargeRequest(body []byte, cfg *config.Config) []byte {
 	if maxTokens <= 0 {
 		maxTokens = 102400
 	}
-	maxMessages := cfg.MaxMessages
-	if maxMessages <= 0 {
-		maxMessages = 100
-	}
-	keepRounds := cfg.KeepRecentRounds
-	if keepRounds <= 0 {
-		keepRounds = 20
-	}
 
 	var req map[string]interface{}
 	if err := json.Unmarshal(body, &req); err != nil {
@@ -122,49 +148,61 @@ func trimLargeRequest(body []byte, cfg *config.Config) []byte {
 	}
 
 	systemMsgs, rounds := parseRounds(messages)
-	totalMsgs := len(messages)
-
-	estimatedTokens := estimateTokens(body)
-
-	needTrim := estimatedTokens > maxTokens || totalMsgs > maxMessages
-
-	if !needTrim || len(rounds) <= 1 {
+	if len(rounds) <= 1 {
 		return body
 	}
 
-	for len(rounds) > 1 {
-		if estimatedTokens <= maxTokens && len(rounds) <= keepRounds {
+	// 估算全部消息（含 system）token 数；未超阈值则不裁剪
+	allMsgsBytes, _ := json.Marshal(messages)
+	estimatedTokens := estimateTokens(allMsgsBytes)
+	if estimatedTokens <= maxTokens {
+		return body
+	}
+
+	// 需要从最旧轮次整轮裁剪的量 = 超出 maxTokens 的部分。
+	// 注意：不是裁掉 maxTokens 那么多，而是裁掉"超出的部分"，尽可能保留最近的上下文。
+	needRemove := estimatedTokens - maxTokens
+	trimmedTokens := 0
+	keepFrom := 0
+	for i := 0; i < len(rounds); i++ {
+		if i >= len(rounds)-1 {
 			break
 		}
-
-		rounds = rounds[1:]
-
-		var keptMsgs []map[string]interface{}
-		keptMsgs = append(keptMsgs, systemMsgs...)
-		for _, r := range rounds {
-			keptMsgs = append(keptMsgs, r...)
-		}
-
-		req["messages"] = keptMsgs
-		newBody, err := json.Marshal(req)
-		if err != nil {
+		roundBytes, _ := json.Marshal(rounds[i])
+		roundTokens := estimateTokens(roundBytes)
+		trimmedTokens += roundTokens
+		keepFrom = i + 1
+		if trimmedTokens >= needRemove {
 			break
 		}
+	}
 
-		body = newBody
-		estimatedTokens = estimateTokens(body)
-		totalMsgs = len(keptMsgs)
+	var keptMsgs []map[string]interface{}
+	keptMsgs = append(keptMsgs, systemMsgs...)
+	for _, r := range rounds[keepFrom:] {
+		keptMsgs = append(keptMsgs, r...)
+	}
+	keptMsgs = sanitizeMessageHead(keptMsgs)
+	if len(keptMsgs) == 0 {
+		return body
+	}
+
+	req["messages"] = keptMsgs
+	newBody, err := json.Marshal(req)
+	if err != nil {
+		return body
 	}
 
 	logger.Info("Request trimmed",
 		zap.Int("original_size", len(body)),
-		zap.Int("new_size", len(body)),
-		zap.Int("original_messages", totalMsgs),
-		zap.Int("remaining_rounds", len(rounds)),
-		zap.Int("estimated_tokens", estimateTokens(body)),
+		zap.Int("new_size", len(newBody)),
+		zap.Int("trimmed_rounds", keepFrom),
+		zap.Int("trimmed_tokens", trimmedTokens),
+		zap.Int("remaining_rounds", len(rounds)-keepFrom),
+		zap.Int("estimated_tokens", estimateTokens(newBody)),
 	)
 
-	return body
+	return newBody
 }
 
 func HandleChatCompletions(c *gin.Context) {
@@ -235,6 +273,7 @@ func HandleChatCompletions(c *gin.Context) {
 	}
 
 	body = trimLargeRequest(body, cfg)
+
 	if err := json.Unmarshal(body, &req); err != nil {
 		logger.Error("Failed to parse trimmed request", zap.Error(err))
 		upstreamLog.HTTPStatus = http.StatusBadRequest

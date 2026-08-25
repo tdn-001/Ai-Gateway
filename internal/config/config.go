@@ -25,8 +25,6 @@ type Config struct {
 	RecoverableStatusCodes []int  `json:"recoverable_status_codes"`
 	RequestTrimmingEnable  bool   `json:"request_trimming_enable"`
 	MaxInputTokens         int    `json:"max_input_tokens"`
-	MaxMessages            int    `json:"max_messages"`
-	KeepRecentRounds     int    `json:"keep_recent_rounds"`
 }
 
 type Prompt struct {
@@ -71,8 +69,6 @@ func Load() (*Config, error) {
 			RecoverableStatusCodes: []int{429, 500, 502, 503, 504},
 			RequestTrimmingEnable:  true,
 			MaxInputTokens:         102400,
-			MaxMessages:            100,
-			KeepRecentRounds:     20,
 		}
 		if err := saveConfig(configInstance); err != nil {
 			return nil, fmt.Errorf("failed to save default config: %w", err)
@@ -111,12 +107,6 @@ func Load() (*Config, error) {
 	if configInstance.MaxInputTokens == 0 {
 		configInstance.MaxInputTokens = 102400
 	}
-	if configInstance.MaxMessages == 0 {
-		configInstance.MaxMessages = 100
-	}
-	if configInstance.KeepRecentRounds == 0 {
-		configInstance.KeepRecentRounds = 20
-	}
 
 	return configInstance, nil
 }
@@ -138,12 +128,6 @@ func UpdateConfig(newCfg *Config) error {
 	}
 	if newCfg.MaxInputTokens == 0 {
 		newCfg.MaxInputTokens = 102400
-	}
-	if newCfg.MaxMessages == 0 {
-		newCfg.MaxMessages = 100
-	}
-	if newCfg.KeepRecentRounds == 0 {
-		newCfg.KeepRecentRounds = 20
 	}
 
 	if err := saveConfig(newCfg); err != nil {

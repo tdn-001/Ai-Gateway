@@ -65,7 +65,7 @@
           <div class="form-group">
             <label>
               请求裁剪
-              <el-tooltip placement="top" content="当客户端发送的请求体过大（如 opencode 长会话累积大量消息）时，自动裁剪旧消息，保留 system 提示和最近的对话上下文，避免因请求过大被上游拒绝（400）。" raw-content>
+              <el-tooltip placement="top" content="当客户端发送的请求体过大（如 opencode 长会话累积大量消息）时，从最旧轮次开始裁剪旧消息，保留 system 提示和最近的对话上下文，避免因请求过大被上游拒绝（400）。" raw-content>
                 <span class="help-icon">?</span>
               </el-tooltip>
             </label>
@@ -74,17 +74,7 @@
           <div class="form-group" v-if="config.request_trimming_enable">
             <label>最大输入Token数(K)</label>
             <el-input-number v-model="config.max_input_tokens_k" :min="32" :max="2048" />
-            <div class="form-tip">超过此 Token 数的请求将被自动裁剪（默认 100K tokens，范围 32K~2M）</div>
-          </div>
-          <div class="form-group" v-if="config.request_trimming_enable">
-            <label>最大消息条数</label>
-            <el-input-number v-model="config.max_messages" :min="5" :max="1000" />
-            <div class="form-tip">消息总数超限时自动裁剪旧消息（默认 100 条）</div>
-          </div>
-          <div class="form-group" v-if="config.request_trimming_enable">
-            <label>保留最近轮次数</label>
-            <el-input-number v-model="config.keep_recent_rounds" :min="1" :max="100" />
-            <div class="form-tip">裁剪时保留的最近交互轮次数（默认20轮，每轮=用户提问+AI回复+工具调用）</div>
+            <div class="form-tip">从最旧轮次开始裁剪，直到请求低于此 Token 数（按轮次上下浮动，保留最近上下文，默认 100K tokens，范围 32K~2M）</div>
           </div>
         </div>
         <el-button type="primary" @click="saveConfig" :loading="savingConfig">保存配置</el-button>
@@ -166,8 +156,6 @@ const config = ref<any>({
   recoverable_status_codes: [429, 500, 502, 503, 504],
   request_trimming_enable: true,
   max_input_tokens_k: 100,
-  max_messages: 100,
-  keep_recent_rounds: 20,
 })
 
 const statusCodeOptions = [
