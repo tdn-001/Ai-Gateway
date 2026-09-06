@@ -20,6 +20,7 @@ type SSEEvent struct {
 	Created int64                    `json:"created"`
 	Model   string                   `json:"model"`
 	Choices []map[string]interface{} `json:"choices"`
+	Usage   map[string]interface{}   `json:"usage,omitempty"`
 }
 
 type sseBuffer struct {
@@ -39,7 +40,7 @@ func forwardSSEToClient(c *gin.Context, lines []string) {
 	}
 }
 
-func handleSSEStream(c *gin.Context, resp *http.Response, session *storage.RecoverySession, logEntry *storage.LogEntry) {
+func handleSSEStream(c *gin.Context, resp *http.Response, session *storage.RecoverySession, logEntry *storage.LogEntry, apiUsageLog *storage.APIKeyUsageLog, promptTokensEstimate int) {
 	cfg, _ := config.Load()
 	isBuffered := cfg != nil && cfg.BufferMode
 
@@ -54,6 +55,7 @@ func handleSSEStream(c *gin.Context, resp *http.Response, session *storage.Recov
 	var buf sseBuffer
 	var fullContent strings.Builder
 	hasOutput := false
+	var lastUsage map[string]interface{}
 
 	for scanner.Scan() {
 		line := scanner.Text()
@@ -89,6 +91,10 @@ func handleSSEStream(c *gin.Context, resp *http.Response, session *storage.Recov
 				}
 			}
 
+			if event.Usage != nil && len(event.Usage) > 0 {
+				lastUsage = event.Usage
+			}
+
 			if isBuffered {
 				buf.lines = append(buf.lines, line)
 			} else {
@@ -101,6 +107,24 @@ func handleSSEStream(c *gin.Context, resp *http.Response, session *storage.Recov
 	session.PreviousOutput = fullContent.String()
 	storage.UpdateSession(session)
 	logEntry.Result = fullContent.String()
+
+	if lastUsage != nil {
+		if promptTokens, ok := lastUsage["prompt_tokens"].(float64); ok {
+			apiUsageLog.PromptTokens = int(promptTokens)
+		}
+		if completionTokens, ok := lastUsage["completion_tokens"].(float64); ok {
+			apiUsageLog.CompletionTokens = int(completionTokens)
+		}
+		if totalTokens, ok := lastUsage["total_tokens"].(float64); ok {
+			apiUsageLog.TotalTokens = int(totalTokens)
+		}
+	} else {
+		// 部分上游（NVIDIA/OneAPI 等）流式响应即使请求 include_usage 也不返回用量，
+		// 此时按请求/输出内容估算 token 数兜底，保证系统统计不为 0。
+		apiUsageLog.PromptTokens = promptTokensEstimate
+		apiUsageLog.CompletionTokens = estimateTokens([]byte(fullContent.String()))
+	}
+	storage.AddAPIKeyUsageLog(*apiUsageLog)
 
 	scannerErr := scanner.Err()
 	if scannerErr != nil {

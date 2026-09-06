@@ -23,12 +23,14 @@ func main() {
 		log.Fatalf("Failed to load config: %v", err)
 	}
 
+	if err := storage.InitDB(); err != nil {
+		log.Fatalf("Failed to init database: %v", err)
+	}
 	storage.Init(cfg.SessionExpireMinute, cfg.LogKeepDays)
 	storage.LoadModelNodes()
 	auth.Init()
 	storage.LoadAPIKeys()
-	storage.LoadAPIKeyUsage()
-
+	storage.LoadTokenStats()
 	r := gin.Default()
 
 	r.GET("/health", func(c *gin.Context) {
@@ -131,14 +133,34 @@ func main() {
 			authorized.GET("/stats/active-ips", func(c *gin.Context) {
 				c.JSON(200, storage.GetActiveIPs())
 			})
-			authorized.GET("/stats/trend", func(c *gin.Context) {
-				interval := c.DefaultQuery("interval", "hour")
-				hours := 24
-				if h := c.Query("hours"); h != "" {
-					fmt.Sscanf(h, "%d", &hours)
-				}
-				c.JSON(200, storage.GetRequestTrend(interval, hours))
-			})
+		authorized.GET("/stats/trend", func(c *gin.Context) {
+			interval := c.DefaultQuery("interval", "hour")
+			hours := 24
+			if h := c.Query("hours"); h != "" {
+				fmt.Sscanf(h, "%d", &hours)
+			}
+			minutes := 0
+			if m := c.Query("minutes"); m != "" {
+				fmt.Sscanf(m, "%d", &minutes)
+			}
+			c.JSON(200, storage.GetRequestTrend(interval, hours, minutes))
+		})
+		authorized.GET("/stats/token-trend", func(c *gin.Context) {
+			interval := c.DefaultQuery("interval", "hour")
+			hours := 24
+			if h := c.Query("hours"); h != "" {
+				fmt.Sscanf(h, "%d", &hours)
+			}
+			minutes := 0
+			if m := c.Query("minutes"); m != "" {
+				fmt.Sscanf(m, "%d", &minutes)
+			}
+			points := 0
+			if p := c.Query("points"); p != "" {
+				fmt.Sscanf(p, "%d", &points)
+			}
+			c.JSON(200, storage.GetTokenTrend(interval, hours, minutes, points))
+		})
 			authorized.GET("/location/:ip", func(c *gin.Context) {
 				ip := c.Param("ip")
 				location := gateway.GetIPLocation(ip)

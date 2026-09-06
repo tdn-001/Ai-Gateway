@@ -31,9 +31,8 @@ type ChatCompletionResponse struct {
 	Usage   map[string]interface{}   `json:"usage"`
 }
 
-func isRecoverableError(statusCode int) bool {
-	cfg, err := config.Load()
-	if err != nil {
+func isRecoverableError(statusCode int, cfg *config.Config) bool {
+	if cfg == nil {
 		// 配置加载失败时回退到硬编码默认值，保证服务稳定
 		return statusCode == 429 || statusCode == 500 || statusCode == 502 || statusCode == 503 || statusCode == 504
 	}
@@ -76,6 +75,23 @@ func isCJKChar(r rune) bool {
 		(r >= 0x3400 && r <= 0x4DBF) || // CJK 扩展 A
 		(r >= 0x3000 && r <= 0x303F) || // CJK 标点
 		(r >= 0xFF00 && r <= 0xFFEF) // 全角字符
+}
+
+// addStreamUsageOption 在客户端未显式请求时，向上游流式请求注入
+// stream_options.include_usage，使上游在流末尾返回真实 token 用量。
+func addStreamUsageOption(body []byte) []byte {
+	var payload map[string]interface{}
+	if err := json.Unmarshal(body, &payload); err != nil {
+		return body
+	}
+	if _, exists := payload["stream_options"]; exists {
+		return body
+	}
+	payload["stream_options"] = map[string]interface{}{"include_usage": true}
+	if b, err := json.Marshal(payload); err == nil {
+		return b
+	}
+	return body
 }
 
 // 保证重建后的消息序列以 system 或 user 开头，丢弃裁剪后悬挂在开头的 assistant/tool 消息
@@ -281,6 +297,14 @@ func HandleChatCompletions(c *gin.Context) {
 		return
 	}
 
+	// 流式请求主动向上游请求返回 token 用量（仅在客户端未指定 stream_options 时注入）。
+	upstreamBody := body
+	if req.Stream {
+		upstreamBody = addStreamUsageOption(body)
+	}
+	// 上游未返回 usage 时，用请求/响应内容估算 prompt 与 completion token 作为兜底。
+	promptTokensEstimate := estimateTokens(body)
+
 	userQuestion := ""
 	for _, msg := range req.Messages {
 		if role, ok := msg["role"].(string); ok && role == "user" {
@@ -342,7 +366,7 @@ func HandleChatCompletions(c *gin.Context) {
 			}
 		}
 
-		nginxReq, err := http.NewRequest("POST", upstreamURL, bytes.NewReader(body))
+		nginxReq, err := http.NewRequest("POST", upstreamURL, bytes.NewReader(upstreamBody))
 		if err != nil {
 			logger.Error("Failed to create nginx request", zap.Error(err))
 			lastError = fmt.Sprintf("创建请求失败: %v", err)
@@ -377,7 +401,7 @@ func HandleChatCompletions(c *gin.Context) {
 			continue
 		}
 
-		if !isRecoverableError(resp.StatusCode) {
+		if !isRecoverableError(resp.StatusCode, cfg) {
 			statusChain = append(statusChain, resp.StatusCode)
 			break
 		}
@@ -436,7 +460,7 @@ func HandleChatCompletions(c *gin.Context) {
 	}
 
 	storage.UpdateAPIKeyLastUsed(apiKey)
-	storage.AddAPIKeyUsageLog(storage.APIKeyUsageLog{
+	apiUsageLog := storage.APIKeyUsageLog{
 		Key:         apiKey,
 		RequestID:   requestID,
 		ClientIP:    clientIP,
@@ -444,7 +468,7 @@ func HandleChatCompletions(c *gin.Context) {
 		Cost:        cost,
 		Status:      resp.StatusCode,
 		Model:       req.Model,
-	})
+	}
 
 	if req.Stream {
 		if resp.StatusCode != http.StatusOK {
@@ -454,11 +478,12 @@ func HandleChatCompletions(c *gin.Context) {
 			logEntry.RequestBody = string(body)
 			logEntry.Result = string(respBody)
 			c.Data(resp.StatusCode, "application/json", respBody)
+			storage.AddAPIKeyUsageLog(apiUsageLog)
 		} else {
-			handleSSEStream(c, resp, session, &logEntry)
+			handleSSEStream(c, resp, session, &logEntry, &apiUsageLog, promptTokensEstimate)
 		}
 	} else {
-		handleJSONResponse(c, resp, session, &logEntry, string(body))
+		handleJSONResponse(c, resp, session, &logEntry, string(body), &apiUsageLog, promptTokensEstimate)
 	}
 
 	storage.AddLog(logEntry)
@@ -470,7 +495,7 @@ func HandleChatCompletions(c *gin.Context) {
 	upstreamLog.Error = logEntry.Error
 }
 
-func handleJSONResponse(c *gin.Context, resp *http.Response, session *storage.RecoverySession, logEntry *storage.LogEntry, requestBody string) {
+func handleJSONResponse(c *gin.Context, resp *http.Response, session *storage.RecoverySession, logEntry *storage.LogEntry, requestBody string, apiUsageLog *storage.APIKeyUsageLog, promptTokensEstimate int) {
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
 		logger.Error("Failed to read response body", zap.Error(err))
@@ -503,6 +528,24 @@ func handleJSONResponse(c *gin.Context, resp *http.Response, session *storage.Re
 			}
 		}
 	}
+
+	if response.Usage != nil {
+		if promptTokens, ok := response.Usage["prompt_tokens"].(float64); ok {
+			apiUsageLog.PromptTokens = int(promptTokens)
+		}
+		if completionTokens, ok := response.Usage["completion_tokens"].(float64); ok {
+			apiUsageLog.CompletionTokens = int(completionTokens)
+		}
+		if totalTokens, ok := response.Usage["total_tokens"].(float64); ok {
+			apiUsageLog.TotalTokens = int(totalTokens)
+		}
+	} else {
+		// 部分上游（如经 OneAPI/流式后端）即使非流式也不返回 usage，按内容估算兜底
+		apiUsageLog.PromptTokens = promptTokensEstimate
+		apiUsageLog.CompletionTokens = estimateTokens([]byte(logEntry.Result))
+	}
+
+	storage.AddAPIKeyUsageLog(*apiUsageLog)
 
 	c.Data(resp.StatusCode, "application/json", body)
 }

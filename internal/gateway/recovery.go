@@ -245,8 +245,11 @@ func handleRecoveryResponse(c *gin.Context, resp *http.Response, session *storag
 		logEntry.ErrorPhase = "recovery"
 		markRecoveryKeyFailure(session)
 
-		cfg, _ := config.Load()
-		if retryCount < cfg.MaxRetryTimes {
+		maxRetries := 5
+		if cfg != nil {
+			maxRetries = cfg.MaxRetryTimes
+		}
+		if retryCount < maxRetries {
 			handleRecovery(c, session, logEntry, retryCount)
 		} else {
 			writeRecoveryTerminate(c, fmt.Sprintf("恢复流式响应中断: %v", scannerErr))

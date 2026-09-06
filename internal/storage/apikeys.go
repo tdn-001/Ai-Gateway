@@ -2,12 +2,12 @@ package storage
 
 import (
 	"crypto/rand"
+	"database/sql"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"os"
-	"path/filepath"
-	"strings"
+	"strconv"
 	"sync"
 	"time"
 )
@@ -22,29 +22,27 @@ type APIKey struct {
 }
 
 type APIKeyUsageLog struct {
-	Key         string  `json:"key"`
-	RequestID   string  `json:"request_id"`
-	ClientIP    string  `json:"client_ip"`
-	RequestTime string  `json:"request_time"`
-	Cost        float64 `json:"cost"`
-	Status      int     `json:"status"`
-	Model       string  `json:"model"`
+	Key              string  `json:"key"`
+	RequestID        string  `json:"request_id"`
+	ClientIP         string  `json:"client_ip"`
+	RequestTime      string  `json:"request_time"`
+	Cost             float64 `json:"cost"`
+	Status           int     `json:"status"`
+	Model            string  `json:"model"`
+	PromptTokens     int     `json:"prompt_tokens,omitempty"`
+	CompletionTokens int     `json:"completion_tokens,omitempty"`
+	TotalTokens      int     `json:"total_tokens,omitempty"`
 }
 
 var (
 	apiKeyCache   []APIKey
 	apiKeyCacheMu sync.RWMutex
-	apiKeyUsage   []APIKeyUsageLog
-	apiKeyUsageMu sync.RWMutex
 	apiKeysDirty  bool
 	apiKeysMu     sync.Mutex
 	stopKeyFlush  chan struct{}
 )
 
-const (
-	apiKeysFile  = "./data/api_keys.json"
-	apiUsageFile = "./data/api_usage.jsonl"
-)
+const apiKeysFile = "./data/api_keys.json"
 
 func init() {
 	stopKeyFlush = make(chan struct{})
@@ -168,8 +166,6 @@ func UpdateAPIKeyLastUsed(key string) {
 }
 
 func CreateAPIKey(name string, customKey string) APIKey {
-	keys := loadAPIKeysFromFile()
-
 	keyValue := customKey
 	if keyValue == "" {
 		keyValue = GenerateAPIKey()
@@ -184,9 +180,11 @@ func CreateAPIKey(name string, customKey string) APIKey {
 		Enabled:      true,
 	}
 
-	keys = append(keys, newKey)
-	saveAPIKeysToFile(keys)
-	reloadAPIKeyCache()
+	apiKeyCacheMu.Lock()
+	apiKeyCache = append(apiKeyCache, newKey)
+	apiKeyCacheMu.Unlock()
+	markAPIKeysDirty()
+
 	return newKey
 }
 
@@ -224,121 +222,72 @@ func GetAllAPIKeys() []APIKey {
 	return cached
 }
 
-// LoadAPIKeyUsage 加载使用日志，兼容旧 json 与新 jsonl 两种格式。
-func LoadAPIKeyUsage() {
-	apiKeyUsageMu.Lock()
-	defer apiKeyUsageMu.Unlock()
-
-	// 优先加载 jsonl（新格式）
-	if _, err := os.Stat(apiUsageFile); err == nil {
-		data, err := os.ReadFile(apiUsageFile)
-		if err != nil {
-			return
-		}
-		lines := strings.Split(string(data), "\n")
-		for _, line := range lines {
-			line = strings.TrimSpace(line)
-			if line == "" {
-				continue
-			}
-			var entry APIKeyUsageLog
-			if err := json.Unmarshal([]byte(line), &entry); err == nil {
-				apiKeyUsage = append(apiKeyUsage, entry)
-			}
-		}
-		return
-	}
-
-	// 迁移：旧格式 api_usage.json → api_usage.jsonl
-	oldFile := "./data/api_usage.json"
-	if _, err := os.Stat(oldFile); err == nil {
-		data, err := os.ReadFile(oldFile)
-		if err == nil {
-			json.Unmarshal(data, &apiKeyUsage)
-		}
-		// 重写为 jsonl
-		os.MkdirAll(filepath.Dir(apiUsageFile), 0755)
-		f, ferr := os.OpenFile(apiUsageFile, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0644)
-		if ferr == nil {
-			for _, entry := range apiKeyUsage {
-				d, _ := json.Marshal(entry)
-				f.Write(d)
-				f.WriteString("\n")
-			}
-			f.Close()
-		}
-		os.Remove(oldFile)
-	}
-}
-
-// AddAPIKeyUsageLog 追加写入内存 + 追加写入 jsonl 文件（O_APPEND），
-// 不再每次全量重写整个文件。
+// AddAPIKeyUsageLog 记录一次 API 调用用量，写入 SQLite api_usage 表。
 func AddAPIKeyUsageLog(log APIKeyUsageLog) {
-	apiKeyUsageMu.Lock()
-	apiKeyUsage = append(apiKeyUsage, log)
-	apiKeyUsageMu.Unlock()
+	AddTokens(log.PromptTokens, log.CompletionTokens)
+	AddDailyRequest(log.PromptTokens + log.CompletionTokens)
 
-	os.MkdirAll(filepath.Dir(apiUsageFile), 0755)
-	data, _ := json.Marshal(log)
-	f, err := os.OpenFile(apiUsageFile, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
-	if err != nil {
-		return
-	}
-	defer f.Close()
-	f.Write(data)
-	f.WriteString("\n")
+	DB.Exec(`INSERT INTO api_usage
+		(key, request_id, client_ip, request_time, cost, status, model, prompt_tokens, completion_tokens, total_tokens)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		log.Key, log.RequestID, log.ClientIP, log.RequestTime, log.Cost, log.Status,
+		log.Model, log.PromptTokens, log.CompletionTokens, log.TotalTokens)
 }
 
 func GetAPIKeyUsageLogs(key string, page, pageSize int) ([]APIKeyUsageLog, int) {
-	apiKeyUsageMu.RLock()
-	defer apiKeyUsageMu.RUnlock()
+	var logs []APIKeyUsageLog
 
-	var filtered []APIKeyUsageLog
-	for _, log := range apiKeyUsage {
-		if key == "" || log.Key == key {
-			filtered = append(filtered, log)
+	var total int
+	if key == "" {
+		DB.QueryRow(`SELECT COUNT(*) FROM api_usage`).Scan(&total)
+	} else {
+		DB.QueryRow(`SELECT COUNT(*) FROM api_usage WHERE key = ?`, key).Scan(&total)
+	}
+
+	var rows *sql.Rows
+	var err error
+	if key == "" {
+		rows, err = DB.Query(`SELECT key, request_id, client_ip, request_time, cost, status, model, prompt_tokens, completion_tokens, total_tokens
+			FROM api_usage ORDER BY id DESC LIMIT ? OFFSET ?`, pageSize, (page-1)*pageSize)
+	} else {
+		rows, err = DB.Query(`SELECT key, request_id, client_ip, request_time, cost, status, model, prompt_tokens, completion_tokens, total_tokens
+			FROM api_usage WHERE key = ? ORDER BY id DESC LIMIT ? OFFSET ?`, key, pageSize, (page-1)*pageSize)
+	}
+	if err != nil {
+		return []APIKeyUsageLog{}, total
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var log APIKeyUsageLog
+		if err := rows.Scan(&log.Key, &log.RequestID, &log.ClientIP, &log.RequestTime, &log.Cost,
+			&log.Status, &log.Model, &log.PromptTokens, &log.CompletionTokens, &log.TotalTokens); err == nil {
+			logs = append(logs, log)
 		}
 	}
 
-	total := len(filtered)
-	start := (page - 1) * pageSize
-	if start >= total {
-		return []APIKeyUsageLog{}, total
-	}
-
-	end := start + pageSize
-	if end > total {
-		end = total
-	}
-
-	return filtered[start:end], total
+	return logs, total
 }
 
 func GetTotalStats() map[string]interface{} {
-	apiKeyUsageMu.RLock()
-	totalRequests := len(apiKeyUsage)
 	todayStr := time.Now().Format("2006-01-02")
-	todayRequests := 0
-	for _, log := range apiKeyUsage {
-		if strings.HasPrefix(log.RequestTime, todayStr) {
-			todayRequests++
-		}
-	}
-	apiKeyUsageMu.RUnlock()
+
+	// 总请求数/今日请求数来自 daily_stats（永久保留，不受日志过期清理影响）
+	var totalRequests int64
+	DB.QueryRow(`SELECT COALESCE(SUM(request_count), 0) FROM daily_stats`).Scan(&totalRequests)
+
+	var todayRequests int64
+	DB.QueryRow(`SELECT COALESCE(request_count, 0) FROM daily_stats WHERE date = ?`, todayStr).Scan(&todayRequests)
 
 	keys := loadAPIKeysFromFile()
 	totalKeys := len(keys)
 
-	logMutex.RLock()
-	totalRetries := 0
-	todayRetries := 0
-	for _, l := range logs {
-		totalRetries += l.RetryCount
-		if strings.HasPrefix(l.RequestTime, todayStr) {
-			todayRetries += l.RetryCount
-		}
-	}
-	logMutex.RUnlock()
+	// 重试次数来自请求日志（按日志保留期清理）
+	var totalRetries, todayRetries int64
+	DB.QueryRow(`SELECT COALESCE(SUM(retry_count), 0) FROM request_logs`).Scan(&totalRetries)
+	DB.QueryRow(`SELECT COALESCE(SUM(retry_count), 0) FROM request_logs WHERE request_time >= ?`, todayStr+" 00:00:00").Scan(&todayRetries)
+
+	totalTokens, todayTokens := GetTokenStats()
 
 	return map[string]interface{}{
 		"total_requests": totalRequests,
@@ -346,28 +295,30 @@ func GetTotalStats() map[string]interface{} {
 		"total_keys":     totalKeys,
 		"total_retries":  totalRetries,
 		"today_retries":  todayRetries,
+		"total_tokens":   formatTokenCount(totalTokens),
+		"today_tokens":   formatTokenCount(todayTokens),
 	}
 }
 
 func GetActiveIPs() []map[string]interface{} {
-	apiKeyUsageMu.RLock()
-	defer apiKeyUsageMu.RUnlock()
+	fiveMinutesAgo := time.Now().Add(-5 * time.Minute)
+	activeIPs := make([]map[string]interface{}, 0)
 
-	ipMap := make(map[string]time.Time)
-	for _, log := range apiKeyUsage {
-		logTime, err := time.Parse("2006-01-02 15:04:05", log.RequestTime)
+	rows, err := DB.Query(`SELECT client_ip, MAX(request_time) AS last_seen FROM api_usage GROUP BY client_ip`)
+	if err != nil {
+		return activeIPs
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var ip, lastSeenStr string
+		if err := rows.Scan(&ip, &lastSeenStr); err != nil {
+			continue
+		}
+		lastSeen, err := time.Parse("2006-01-02 15:04:05", lastSeenStr)
 		if err != nil {
 			continue
 		}
-		if existing, exists := ipMap[log.ClientIP]; !exists || logTime.After(existing) {
-			ipMap[log.ClientIP] = logTime
-		}
-	}
-
-	var activeIPs []map[string]interface{}
-	fiveMinutesAgo := time.Now().Add(-5 * time.Minute)
-
-	for ip, lastSeen := range ipMap {
 		activeIPs = append(activeIPs, map[string]interface{}{
 			"ip":        ip,
 			"last_seen": lastSeen.Format("2006-01-02 15:04:05"),
@@ -378,85 +329,77 @@ func GetActiveIPs() []map[string]interface{} {
 	return activeIPs
 }
 
-func GetRequestTrend(interval string, hours int) []map[string]interface{} {
-	apiKeyUsageMu.RLock()
-	defer apiKeyUsageMu.RUnlock()
+// usageBucketAgg 缓存单个时间桶的聚合结果。
+type usageBucketAgg struct {
+	count  int64
+	tokens int64
+}
 
+// queryUsageBuckets 按 prefixLen 分组统计 api_usage 中 [cutoff, now] 内的请求数与 token 数。
+func queryUsageBuckets(cutoffPrefix string, prefixLen int) map[string]usageBucketAgg {
+	agg := make(map[string]usageBucketAgg)
+
+	rows, err := DB.Query(`SELECT substr(request_time, 1, ?), COUNT(*),
+		COALESCE(SUM(prompt_tokens) + SUM(completion_tokens), 0)
+		FROM api_usage
+		WHERE substr(request_time, 1, ?) >= ?
+		GROUP BY substr(request_time, 1, ?)`,
+		prefixLen, prefixLen, cutoffPrefix, prefixLen)
+	if err != nil {
+		return agg
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var bucket string
+		var a usageBucketAgg
+		if err := rows.Scan(&bucket, &a.count, &a.tokens); err != nil {
+			continue
+		}
+		agg[bucket] = a
+	}
+
+	return agg
+}
+
+func GetRequestTrend(interval string, hours int, minutes int) []map[string]interface{} {
 	now := time.Now()
 	var trend []map[string]interface{}
 
+	// 周/月视图从持久化的 daily_stats 读取，不受日志清理影响
+	if interval == "week" || interval == "month" {
+		return getLongTermTrend(interval, now)
+	}
+
+	// 小时/分钟/天视图从 api_usage 读取（短期数据，按日志保留期清理）
 	switch interval {
 	case "hour":
+		agg := queryUsageBuckets(now.Add(-time.Duration(hours)*time.Hour).Format("2006-01-02 15"), 13)
 		for i := hours; i >= 0; i-- {
 			t := now.Add(-time.Duration(i) * time.Hour)
-			count := 0
-			for _, log := range apiKeyUsage {
-				logTime, err := time.Parse("2006-01-02 15:04:05", log.RequestTime)
-				if err != nil {
-					continue
-				}
-				if logTime.Hour() == t.Hour() && logTime.Day() == t.Day() && logTime.Month() == t.Month() {
-					count++
-				}
-			}
+			count := agg[t.Format("2006-01-02 15")].count
 			trend = append(trend, map[string]interface{}{
 				"time":  t.Format("15:00"),
 				"count": count,
 			})
 		}
 	case "day":
+		agg := queryUsageBuckets(now.AddDate(0, 0, -7).Format("2006-01-02"), 10)
 		for i := 7; i >= 0; i-- {
 			t := now.AddDate(0, 0, -i)
-			count := 0
-			for _, log := range apiKeyUsage {
-				logTime, err := time.Parse("2006-01-02 15:04:05", log.RequestTime)
-				if err != nil {
-					continue
-				}
-				if logTime.Year() == t.Year() && logTime.YearDay() == t.YearDay() {
-					count++
-				}
-			}
+			count := agg[t.Format("2006-01-02")].count
 			trend = append(trend, map[string]interface{}{
 				"time":  t.Format("01-02"),
 				"count": count,
 			})
 		}
-	case "week":
-		for i := 4; i >= 0; i-- {
-			t := now.AddDate(0, 0, -i*7)
-			count := 0
-			for _, log := range apiKeyUsage {
-				logTime, err := time.Parse("2006-01-02 15:04:05", log.RequestTime)
-				if err != nil {
-					continue
-				}
-				logWeek := logTime.YearDay() / 7
-				tWeek := t.YearDay() / 7
-				if logTime.Year() == t.Year() && logWeek == tWeek {
-					count++
-				}
-			}
+	case "minute":
+		agg := queryUsageBuckets(now.Add(-time.Duration(minutes)*time.Minute).Format("2006-01-02 15:04"), 16)
+		for i := minutes; i >= 0; i-- {
+			t := now.Add(-time.Duration(i) * time.Minute)
+			count := agg[t.Format("2006-01-02 15:04")].count
 			trend = append(trend, map[string]interface{}{
-				"time":  t.Format("01-02"),
-				"count": count,
-			})
-		}
-	case "month":
-		for i := 11; i >= 0; i-- {
-			t := now.AddDate(0, -i, 0)
-			count := 0
-			for _, log := range apiKeyUsage {
-				logTime, err := time.Parse("2006-01-02 15:04:05", log.RequestTime)
-				if err != nil {
-					continue
-				}
-				if logTime.Year() == t.Year() && logTime.Month() == t.Month() {
-					count++
-				}
-			}
-			trend = append(trend, map[string]interface{}{
-				"time":  t.Format("01-02"),
+				"time":  t.Format("15:04"),
 				"count": count,
 			})
 		}
@@ -465,29 +408,149 @@ func GetRequestTrend(interval string, hours int) []map[string]interface{} {
 	return trend
 }
 
-// cleanAPIUsage 清理过期条目并重写 jsonl 文件。
-func cleanAPIUsage(cutoff time.Time) {
-	apiKeyUsageMu.Lock()
-	defer apiKeyUsageMu.Unlock()
+// getLongTermTrend 从持久化 daily_stats 读取周/月趋势，不受 LogKeepDays 清理影响。
+func getLongTermTrend(interval string, now time.Time) []map[string]interface{} {
+	var trend []map[string]interface{}
 
-	var newUsage []APIKeyUsageLog
-	for _, u := range apiKeyUsage {
-		t, err := time.Parse("2006-01-02 15:04:05", u.RequestTime)
-		if err != nil || t.After(cutoff) {
-			newUsage = append(newUsage, u)
+	switch interval {
+	case "week":
+		for i := 4; i >= 0; i-- {
+			weekEnd := now.AddDate(0, 0, -i*7)
+			weekStart := weekEnd.AddDate(0, 0, -6)
+			dailyCounts := GetDailyRequestCount(weekStart.Format("2006-01-02"), weekEnd.Format("2006-01-02"))
+			count := int64(0)
+			for _, c := range dailyCounts {
+				count += c
+			}
+			trend = append(trend, map[string]interface{}{
+				"time":  weekStart.Format("01-02") + "~" + weekEnd.Format("01-02"),
+				"count": count,
+			})
+		}
+	case "month":
+		for i := 11; i >= 0; i-- {
+			t := now.AddDate(0, -i, 0)
+			startDate := time.Date(t.Year(), t.Month(), 1, 0, 0, 0, 0, t.Location()).Format("2006-01-02")
+			endDate := time.Date(t.Year(), t.Month()+1, 0, 0, 0, 0, 0, t.Location()).Format("2006-01-02")
+			dailyCounts := GetDailyRequestCount(startDate, endDate)
+			count := int64(0)
+			for _, c := range dailyCounts {
+				count += c
+			}
+			trend = append(trend, map[string]interface{}{
+				"time":  t.Format("2006-01"),
+				"count": count,
+			})
 		}
 	}
-	apiKeyUsage = newUsage
 
-	os.MkdirAll(filepath.Dir(apiUsageFile), 0755)
-	f, err := os.OpenFile(apiUsageFile, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0644)
-	if err != nil {
-		return
+	return trend
+}
+
+// cleanAPIUsage 清理过期的 API 用量记录。
+func cleanAPIUsage(cutoff time.Time) {
+	DB.Exec(`DELETE FROM api_usage WHERE request_time < ?`, cutoff.Format("2006-01-02 15:04:05"))
+}
+
+func formatTokenCount(n int64) string {
+	if n >= 1000000 {
+		return fmt.Sprintf("%.1fM", float64(n)/1000000)
 	}
-	defer f.Close()
-	for _, entry := range apiKeyUsage {
-		data, _ := json.Marshal(entry)
-		f.Write(data)
-		f.WriteString("\n")
+	if n >= 1000 {
+		return fmt.Sprintf("%.1fK", float64(n)/1000)
 	}
+	return strconv.FormatInt(n, 10)
+}
+
+// GetTokenTrend 返回 token 消耗趋势，与 GetRequestTrend 相同的时间桶，
+// 数据来自 api_usage（短期）与 daily_stats（周/月，永久）。
+// points 控制返回的数据点数量，用于前端指定精度（如1小时24点）。
+func GetTokenTrend(interval string, hours int, minutes int, points int) []map[string]interface{} {
+	now := time.Now()
+	var trend []map[string]interface{}
+
+	switch interval {
+	case "hour":
+		agg := queryUsageBuckets(now.Add(-time.Duration(hours)*time.Hour).Format("2006-01-02 15"), 13)
+		for i := hours; i >= 0; i-- {
+			t := now.Add(-time.Duration(i) * time.Hour)
+			tokens := agg[t.Format("2006-01-02 15")].tokens
+			trend = append(trend, map[string]interface{}{
+				"time":  t.Format("15:00"),
+				"count": tokens,
+			})
+		}
+	case "minute":
+		// 按 step 分桶采样，返回约 points 个数据点
+		if points <= 0 {
+			points = minutes
+		}
+		step := 1
+		if points < minutes {
+			step = minutes / points
+		}
+		agg := queryUsageBuckets(now.Add(-time.Duration(minutes)*time.Minute).Format("2006-01-02 15:04"), 16)
+		for i := minutes; i >= 0; i -= step {
+			t := now.Add(-time.Duration(i) * time.Minute)
+			tokens := agg[t.Format("2006-01-02 15:04")].tokens
+			trend = append(trend, map[string]interface{}{
+				"time":  t.Format("15:04"),
+				"count": tokens,
+			})
+		}
+	case "day":
+		agg := queryUsageBuckets(now.AddDate(0, 0, -7).Format("2006-01-02"), 10)
+		for i := 7; i >= 0; i-- {
+			t := now.AddDate(0, 0, -i)
+			tokens := agg[t.Format("2006-01-02")].tokens
+			trend = append(trend, map[string]interface{}{
+				"time":  t.Format("01-02"),
+				"count": tokens,
+			})
+		}
+	case "week":
+		return getTokenLongTermTrend("week", now)
+	case "month":
+		return getTokenLongTermTrend("month", now)
+	}
+
+	return trend
+}
+
+func getTokenLongTermTrend(interval string, now time.Time) []map[string]interface{} {
+	var trend []map[string]interface{}
+
+	switch interval {
+	case "week":
+		for i := 4; i >= 0; i-- {
+			weekEnd := now.AddDate(0, 0, -i*7)
+			weekStart := weekEnd.AddDate(0, 0, -6)
+			dailyTokens := GetDailyTokenCount(weekStart.Format("2006-01-02"), weekEnd.Format("2006-01-02"))
+			count := int64(0)
+			for _, c := range dailyTokens {
+				count += c
+			}
+			trend = append(trend, map[string]interface{}{
+				"time":  weekStart.Format("01-02") + "~" + weekEnd.Format("01-02"),
+				"count": count,
+			})
+		}
+	case "month":
+		for i := 11; i >= 0; i-- {
+			t := now.AddDate(0, -i, 0)
+			startDate := time.Date(t.Year(), t.Month(), 1, 0, 0, 0, 0, t.Location()).Format("2006-01-02")
+			endDate := time.Date(t.Year(), t.Month()+1, 0, 0, 0, 0, 0, t.Location()).Format("2006-01-02")
+			dailyTokens := GetDailyTokenCount(startDate, endDate)
+			count := int64(0)
+			for _, c := range dailyTokens {
+				count += c
+			}
+			trend = append(trend, map[string]interface{}{
+				"time":  t.Format("2006-01"),
+				"count": count,
+			})
+		}
+	}
+
+	return trend
 }

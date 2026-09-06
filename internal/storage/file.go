@@ -1,11 +1,6 @@
 package storage
 
 import (
-	"encoding/json"
-	"fmt"
-	"os"
-	"path/filepath"
-	"strings"
 	"sync"
 	"time"
 
@@ -53,52 +48,18 @@ type UpstreamLogEntry struct {
 }
 
 var (
-	sessions       = make(map[string]*RecoverySession)
-	sessionMutex   sync.RWMutex
-	logs           []LogEntry
-	logMutex       sync.RWMutex
-	upstreamLogs   []UpstreamLogEntry
-	upstreamMutex  sync.RWMutex
-	sessionExpire  int
-	logKeepDays    int
-	logChan        = make(chan LogEntry, 4096)
-	upstreamLogCh  = make(chan UpstreamLogEntry, 4096)
-	stopLogFlush   chan struct{}
-)
-
-const (
-	requestLogDir     = "./data/logs"
-	requestLogPattern = "request_*.log"
-	upstreamLogDir    = "./data/logs"
-	upstreamLogPattern = "upstream_*.log"
-	zapLogDir         = "./data/logs"
-	zapLogPattern     = "gateway_*.log"
+	sessions      = make(map[string]*RecoverySession)
+	sessionMutex  sync.RWMutex
+	sessionExpire int
+	logKeepDays   int
 )
 
 func Init(expireMinutes, keepDays int) {
 	sessionExpire = expireMinutes
 	logKeepDays = keepDays
 
-	stopLogFlush = make(chan struct{})
-	go logFlushWorker()
 	go cleanExpiredSessions()
 	go cleanExpiredLogs()
-
-	loadLogs()
-	loadUpstreamLogs()
-}
-
-func logFlushWorker() {
-	for {
-		select {
-		case entry := <-logChan:
-			saveLog(entry)
-		case entry := <-upstreamLogCh:
-			saveUpstreamLog(entry)
-		case <-stopLogFlush:
-			return
-		}
-	}
 }
 
 // 会话管理
@@ -148,186 +109,95 @@ func cleanExpiredSessions() {
 	}
 }
 
-// AddLog 追加内存（同步，快速）+ 异步落盘，不阻塞请求关键路径。
+// AddLog 追加写入一条请求日志到 SQLite。
 func AddLog(entry LogEntry) {
-	logMutex.Lock()
-	logs = append(logs, entry)
-	logMutex.Unlock()
-
-	select {
-	case logChan <- entry:
-	default:
-		// channel 满时丢弃异步写，内存已有记录，不会丢数据
+	recoverInt := 0
+	if entry.Recover {
+		recoverInt = 1
 	}
+	DB.Exec(`INSERT INTO request_logs
+		(request_id, client_ip, request_time, cost, status, status_chain, request_body,
+		 recover, recover_count, error, error_phase, retry_count, partial_output, result)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		entry.RequestID, entry.ClientIP, entry.RequestTime, entry.Cost, entry.HTTPStatus,
+		entry.StatusChain, entry.RequestBody, recoverInt, entry.RecoverCount, entry.Error,
+		entry.ErrorPhase, entry.RetryCount, entry.PartialOutput, entry.Result)
 }
 
+// GetLogs 返回最近的请求日志（新的在前）。
 func GetLogs(c *gin.Context) {
-	logMutex.RLock()
-	defer logMutex.RUnlock()
+	c.JSON(200, queryRequestLogs(1000))
+}
 
-	// 返回最近的日志
-	start := 0
-	if len(logs) > 1000 {
-		start = len(logs) - 1000
+func queryRequestLogs(limit int) []LogEntry {
+	var result []LogEntry
+	rows, err := DB.Query(`SELECT request_id, client_ip, request_time, cost, status, status_chain,
+		request_body, recover, recover_count, error, error_phase, retry_count, partial_output, result
+		FROM request_logs ORDER BY id DESC LIMIT ?`, limit)
+	if err != nil {
+		return []LogEntry{}
 	}
-	c.JSON(200, logs[start:])
+	defer rows.Close()
+
+	for rows.Next() {
+		var e LogEntry
+		var recoverInt int
+		if err := rows.Scan(&e.RequestID, &e.ClientIP, &e.RequestTime, &e.Cost, &e.HTTPStatus,
+			&e.StatusChain, &e.RequestBody, &recoverInt, &e.RecoverCount, &e.Error,
+			&e.ErrorPhase, &e.RetryCount, &e.PartialOutput, &e.Result); err != nil {
+			continue
+		}
+		e.Recover = recoverInt == 1
+		result = append(result, e)
+	}
+	return result
 }
 
 func ClearLogs(c *gin.Context) {
-	logMutex.Lock()
-	upstreamMutex.Lock()
-	defer logMutex.Unlock()
-	defer upstreamMutex.Unlock()
-
-	logs = make([]LogEntry, 0)
-	upstreamLogs = make([]UpstreamLogEntry, 0)
-	clearLogFiles()
-	clearUpstreamLogFiles()
-	c.JSON(200, gin.H{"message": "Logs cleared"})
+	DB.Exec(`DELETE FROM request_logs`)
+	DB.Exec(`DELETE FROM upstream_logs`)
+	c.JSON(200, map[string]string{"message": "Logs cleared"})
 }
 
-// AddUpstreamLog 追加内存（同步，快速）+ 异步落盘，不阻塞请求关键路径。
+// AddUpstreamLog 追加写入一条上游日志到 SQLite。
 func AddUpstreamLog(entry UpstreamLogEntry) {
-	upstreamMutex.Lock()
-	upstreamLogs = append(upstreamLogs, entry)
-	upstreamMutex.Unlock()
-
-	select {
-	case upstreamLogCh <- entry:
-	default:
+	streamInt := 0
+	if entry.Stream {
+		streamInt = 1
 	}
+	DB.Exec(`INSERT INTO upstream_logs
+		(request_id, client_ip, request_time, cost, status, model, stream, error)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+		entry.RequestID, entry.ClientIP, entry.RequestTime, entry.Cost,
+		entry.HTTPStatus, entry.Model, streamInt, entry.Error)
 }
 
+// GetUpstreamLogs 返回最近的上游日志（新的在前）。
 func GetUpstreamLogs(c *gin.Context) {
-	upstreamMutex.RLock()
-	defer upstreamMutex.RUnlock()
-
-	start := 0
-	if len(upstreamLogs) > 1000 {
-		start = len(upstreamLogs) - 1000
-	}
-	c.JSON(200, upstreamLogs[start:])
+	c.JSON(200, GetUpstreamLogEntries(1000))
 }
 
-func saveUpstreamLog(entry UpstreamLogEntry) {
-	os.MkdirAll(upstreamLogDir, 0755)
-	logFileName := filepath.Join(upstreamLogDir, fmt.Sprintf("upstream_%s.log", time.Now().Format("2006-01-02")))
-
-	data, err := json.Marshal(entry)
+// GetUpstreamLogEntries 返回最近的上游日志切片（内部用）。
+func GetUpstreamLogEntries(limit int) []UpstreamLogEntry {
+	var result []UpstreamLogEntry
+	rows, err := DB.Query(`SELECT request_id, client_ip, request_time, cost, status, model, stream, error
+		FROM upstream_logs ORDER BY id DESC LIMIT ?`, limit)
 	if err != nil {
-		return
+		return []UpstreamLogEntry{}
 	}
+	defer rows.Close()
 
-	f, err := os.OpenFile(logFileName, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
-	if err != nil {
-		return
-	}
-	defer f.Close()
-
-	f.Write(data)
-	f.WriteString("\n")
-}
-
-func loadUpstreamLogs() {
-	upstreamMutex.Lock()
-	defer upstreamMutex.Unlock()
-
-	matches, err := filepath.Glob(filepath.Join(upstreamLogDir, upstreamLogPattern))
-	if err != nil {
-		return
-	}
-
-	for _, logFileName := range matches {
-		data, err := os.ReadFile(logFileName)
-		if err != nil {
+	for rows.Next() {
+		var e UpstreamLogEntry
+		var streamInt int
+		if err := rows.Scan(&e.RequestID, &e.ClientIP, &e.RequestTime, &e.Cost,
+			&e.HTTPStatus, &e.Model, &streamInt, &e.Error); err != nil {
 			continue
 		}
-
-		lines := strings.Split(string(data), "\n")
-		for _, line := range lines {
-			line = strings.TrimSpace(line)
-			if line == "" {
-				continue
-			}
-			var entry UpstreamLogEntry
-			if err := json.Unmarshal([]byte(line), &entry); err != nil {
-				continue
-			}
-			upstreamLogs = append(upstreamLogs, entry)
-		}
+		e.Stream = streamInt == 1
+		result = append(result, e)
 	}
-}
-
-func clearUpstreamLogFiles() {
-	matches, err := filepath.Glob(filepath.Join(upstreamLogDir, upstreamLogPattern))
-	if err != nil {
-		return
-	}
-
-	for _, logFileName := range matches {
-		os.Remove(logFileName)
-	}
-}
-
-func saveLog(entry LogEntry) {
-	logDir := requestLogDir
-	os.MkdirAll(logDir, 0755)
-	logFileName := filepath.Join(logDir, fmt.Sprintf("request_%s.log", time.Now().Format("2006-01-02")))
-	
-	data, err := json.Marshal(entry)
-	if err != nil {
-		return
-	}
-
-	f, err := os.OpenFile(logFileName, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
-	if err != nil {
-		return
-	}
-	defer f.Close()
-
-	f.Write(data)
-	f.WriteString("\n")
-}
-
-func loadLogs() {
-	logMutex.Lock()
-	defer logMutex.Unlock()
-
-	matches, err := filepath.Glob(filepath.Join(requestLogDir, requestLogPattern))
-	if err != nil {
-		return
-	}
-
-	for _, logFileName := range matches {
-		data, err := os.ReadFile(logFileName)
-		if err != nil {
-			continue
-		}
-
-		lines := strings.Split(string(data), "\n")
-		for _, line := range lines {
-			line = strings.TrimSpace(line)
-			if line == "" {
-				continue
-			}
-			var entry LogEntry
-			if err := json.Unmarshal([]byte(line), &entry); err != nil {
-				continue
-			}
-			logs = append(logs, entry)
-		}
-	}
-}
-
-func clearLogFiles() {
-	matches, err := filepath.Glob(filepath.Join(requestLogDir, requestLogPattern))
-	if err != nil {
-		return
-	}
-
-	for _, logFileName := range matches {
-		os.Remove(logFileName)
-	}
+	return result
 }
 
 func cleanExpiredLogs() {
@@ -336,51 +206,11 @@ func cleanExpiredLogs() {
 
 	for range ticker.C {
 		cutoff := time.Now().AddDate(0, 0, -logKeepDays)
+		cutoffStr := cutoff.Format("2006-01-02 15:04:05")
 
-		logMutex.Lock()
-		var newLogs []LogEntry
-		for _, entry := range logs {
-			t, err := time.Parse("2006-01-02 15:04:05", entry.RequestTime)
-			if err != nil || t.After(cutoff) {
-				newLogs = append(newLogs, entry)
-			}
-		}
-		logs = newLogs
-		logMutex.Unlock()
-
-		upstreamMutex.Lock()
-		var newUpstream []UpstreamLogEntry
-		for _, entry := range upstreamLogs {
-			t, err := time.Parse("2006-01-02 15:04:05", entry.RequestTime)
-			if err != nil || t.After(cutoff) {
-				newUpstream = append(newUpstream, entry)
-			}
-		}
-		upstreamLogs = newUpstream
-		upstreamMutex.Unlock()
-
-		cleanOldLogFiles(cutoff, requestLogDir, requestLogPattern)
-		cleanOldLogFiles(cutoff, upstreamLogDir, upstreamLogPattern)
-		cleanOldLogFiles(cutoff, zapLogDir, zapLogPattern)
+		DB.Exec(`DELETE FROM request_logs WHERE request_time < ?`, cutoffStr)
+		DB.Exec(`DELETE FROM upstream_logs WHERE request_time < ?`, cutoffStr)
 		cleanAPIUsage(cutoff)
-	}
-}
-
-func cleanOldLogFiles(cutoff time.Time, dir string, pattern string) {
-	matches, err := filepath.Glob(filepath.Join(dir, pattern))
-	if err != nil {
-		return
-	}
-
-	for _, logFileName := range matches {
-		info, err := os.Stat(logFileName)
-		if err != nil {
-			continue
-		}
-
-		if info.ModTime().Before(cutoff) {
-			os.Remove(logFileName)
-		}
 	}
 }
 

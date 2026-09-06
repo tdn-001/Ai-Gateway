@@ -46,40 +46,41 @@
           <div class="stats-section">
             <h4>系统统计</h4>
             <el-row :gutter="16">
-              <el-col :span="4">
+              <el-col :span="3">
                 <div class="stat-item">
                   <div class="stat-value">{{ stats.total_requests }}</div>
                   <div class="stat-label">总请求</div>
                 </div>
               </el-col>
-              <el-col :span="4">
+              <el-col :span="3">
                 <div class="stat-item">
                   <div class="stat-value highlight">{{ stats.today_requests }}</div>
                   <div class="stat-label">今日请求</div>
                 </div>
               </el-col>
-              <el-col :span="4">
+              <el-col :span="3">
                 <div class="stat-item">
                   <div class="stat-value">{{ stats.total_retries }}</div>
                   <div class="stat-label">总重试</div>
                 </div>
               </el-col>
-              <el-col :span="4">
+              <el-col :span="3">
                 <div class="stat-item">
                   <div class="stat-value highlight">{{ stats.today_retries }}</div>
                   <div class="stat-label">今日重试</div>
                 </div>
               </el-col>
-              <el-col :span="4">
+
+              <el-col :span="3">
                 <div class="stat-item">
-                  <div class="stat-value">{{ stats.total_keys }}</div>
-                  <div class="stat-label">API Keys</div>
+                  <div class="stat-value">{{ stats.total_tokens || 0 }}</div>
+                  <div class="stat-label">总Token</div>
                 </div>
               </el-col>
-              <el-col :span="4">
+              <el-col :span="3">
                 <div class="stat-item">
-                  <div class="stat-value">{{ activeIPs.length }}</div>
-                  <div class="stat-label">活跃IP</div>
+                  <div class="stat-value highlight">{{ stats.today_tokens || 0 }}</div>
+                  <div class="stat-label">今日Token</div>
                 </div>
               </el-col>
             </el-row>
@@ -122,7 +123,7 @@
             </div>
           </template>
           
-          <el-table :data="mergedLogs" size="small" style="width: 100%">
+          <el-table :data="mergedLogs" size="small" style="width: 100%; flex: 1; min-height: 0;">
             <el-table-column prop="time" label="时间" width="140" />
             <el-table-column label="方向" width="70">
               <template #default="scope">
@@ -156,6 +157,30 @@
             </el-table-column>
           </el-table>
         </el-card>
+
+        <el-card class="token-trend-card">
+          <template #header>
+            <div class="card-header">
+              <span>Token 消耗趋势</span>
+              <div class="header-right">
+                <span v-if="tokenTrendInterval === 'hour'" class="zoom-hint">
+                  <template v-if="tokenHoursRange < 1440">
+                    最近 {{ tokenTrendLabel() }} ·
+                    <el-button link type="primary" size="small" @click="resetTokenTrendZoom">重置24小时</el-button>
+                  </template>
+                  <template v-else>最近 24 小时</template>
+                </span>
+                <el-radio-group v-model="tokenTrendInterval" size="small" @change="onTokenTrendIntervalChange">
+                  <el-radio-button value="hour">每小时</el-radio-button>
+                  <el-radio-button value="day">每天</el-radio-button>
+                  <el-radio-button value="week">每周</el-radio-button>
+                  <el-radio-button value="month">每月</el-radio-button>
+                </el-radio-group>
+              </div>
+            </div>
+          </template>
+          <div ref="tokenChartRef" class="token-trend-chart"></div>
+        </el-card>
       </el-col>
     </el-row>
     
@@ -163,15 +188,24 @@
       <template #header>
         <div class="card-header">
           <span>请求趋势</span>
-          <el-radio-group v-model="trendInterval" size="small" @change="onTrendIntervalChange">
-            <el-radio-button value="hour">每小时</el-radio-button>
-            <el-radio-button value="day">每天</el-radio-button>
-            <el-radio-button value="week">每周</el-radio-button>
-            <el-radio-button value="month">每月</el-radio-button>
-          </el-radio-group>
+          <div class="header-right">
+            <span v-if="trendInterval === 'hour'" class="zoom-hint">
+              <template v-if="hoursRange < 1440">
+                最近 {{ trendLabel() }} ·
+                <el-button link type="primary" size="small" @click="resetTrendZoom">重置24小时</el-button>
+              </template>
+              <template v-else>最近 24 小时</template>
+            </span>
+            <el-radio-group v-model="trendInterval" size="small" @change="onTrendIntervalChange">
+              <el-radio-button value="hour">每小时</el-radio-button>
+              <el-radio-button value="day">每天</el-radio-button>
+              <el-radio-button value="week">每周</el-radio-button>
+              <el-radio-button value="month">每月</el-radio-button>
+            </el-radio-group>
+          </div>
         </div>
       </template>
-      <div ref="chartRef" style="height: 300px"></div>
+      <div ref="chartRef" class="trend-chart"></div>
     </el-card>
   </div>
 </template>
@@ -197,7 +231,7 @@ const activeNodeUrl = ref('')
 
 const gatewayUrl = window.location.origin
 
-const stats = ref({ total_requests: 0, today_requests: 0, total_keys: 0, total_retries: 0, today_retries: 0 })
+const stats = ref({ total_requests: 0, today_requests: 0, total_keys: 0, total_retries: 0, today_retries: 0, total_tokens: 0, today_tokens: 0 })
 const logs = ref<any[]>([])
 const upstreamLogs = ref<any[]>([])
 const mergedLogs = ref<any[]>([])
@@ -208,7 +242,35 @@ const trendData = ref<any[]>([])
 const chartRef = ref()
 let chart: echarts.ECharts | null = null
 let autoRefreshTimer: number | null = null
+let trendWheelTimer: number | null = null
 const autoRefreshInterval = ref(0)
+
+// Token 消耗趋势
+const tokenTrendInterval = ref('hour')
+const tokenTrendData = ref<any[]>([])
+const tokenChartRef = ref()
+let tokenChart: echarts.ECharts | null = null
+let tokenTrendWheelTimer: number | null = null
+const tokenHoursRange = ref(24)
+
+// 请求趋势滚轮缩放：仅"每小时"视图生效。
+// 小时级：24h→12h→6h→3h→2h→1h；分钟级：45min→30min→15min→10min→5min→3min→1min。
+const trendZoomWindows = [
+  { minutes: 1440, label: '24 小时' },
+  { minutes: 720, label: '12 小时' },
+  { minutes: 360, label: '6 小时' },
+  { minutes: 180, label: '3 小时' },
+  { minutes: 120, label: '2 小时' },
+  { minutes: 60, label: '1 小时' },
+  { minutes: 45, label: '45 分钟' },
+  { minutes: 30, label: '30 分钟' },
+  { minutes: 15, label: '15 分钟' },
+  { minutes: 10, label: '10 分钟' },
+  { minutes: 5, label: '5 分钟' },
+  { minutes: 3, label: '3 分钟' },
+  { minutes: 1, label: '1 分钟' },
+]
+const hoursRange = ref(24)
 
 const token = localStorage.getItem('token')
 const headers = { Authorization: `Bearer ${token}` }
@@ -236,7 +298,7 @@ const buildMergedLogs = () => {
     })
   })
   list.sort((a, b) => (a.time < b.time ? 1 : -1))
-  mergedLogs.value = list.slice(0, 20)
+  mergedLogs.value = list.slice(0, 12)
 }
 
 const loadMergedLocations = async () => {
@@ -312,11 +374,14 @@ const fetchData = async () => {
 // 配置、统计等低频数据在页面加载时一次性获取。
 const refreshLogsAndTrend = async () => {
   try {
-    const [statsRes, logsRes, upLogsRes, trendRes] = await Promise.all([
+    const params = trendHours()
+    const tokenParams = tokenTrendHours()
+    const [statsRes, logsRes, upLogsRes, trendRes, tokenTrendRes] = await Promise.all([
       axios.get('/admin/stats', { headers }),
       axios.get('/admin/logs', { headers }),
       axios.get('/admin/upstream-logs', { headers }),
-      axios.get('/admin/stats/trend', { params: { interval: trendInterval.value, hours: 24 }, headers })
+      axios.get('/admin/stats/trend', { params, headers }),
+      axios.get('/admin/stats/token-trend', { params: tokenParams, headers })
     ])
     stats.value = statsRes.data
     logs.value = logsRes.data || []
@@ -324,23 +389,62 @@ const refreshLogsAndTrend = async () => {
     buildMergedLogs()
     loadMergedLocations()
     trendData.value = trendRes.data || []
+    tokenTrendData.value = tokenTrendRes.data || []
     renderChart()
+    renderTokenChart()
   } catch (error) {
     console.error('Failed to refresh logs and trend:', error)
   }
 }
 
+const trendHours = () => {
+  if (trendInterval.value !== 'hour') return { interval: 'hour', hours: 24 }
+  const win = trendZoomWindows.find(w => w.minutes === hoursRange.value)
+  if (!win) return { interval: 'hour', hours: 24 }
+  if (hoursRange.value < 60) return { interval: 'minute', minutes: hoursRange.value }
+  return { interval: 'hour', hours: Math.floor(hoursRange.value / 60) }
+}
+
 const fetchTrend = async () => {
   try {
-    const response = await axios.get('/admin/stats/trend', {
-      params: { interval: trendInterval.value, hours: 24 },
-      headers
-    })
+    const params = trendHours()
+    const response = await axios.get('/admin/stats/trend', { params, headers })
     trendData.value = response.data || []
     renderChart()
   } catch (error) {
     console.error('Failed to fetch trend:', error)
   }
+}
+
+// 滚轮放大/缩小：滚轮向上放大（窗口缩小），向下还原。
+// 悬停即可触发，无需点击图表获取焦点。
+const onTrendWheel = (e: WheelEvent) => {
+  if (trendInterval.value !== 'hour') return
+  // 无条件阻止页面滚动，确保悬浮即可缩放
+  e.preventDefault()
+  const idx = trendZoomWindows.findIndex(w => w.minutes === hoursRange.value)
+  if (idx === -1) return
+  const zoomIn = e.deltaY < 0
+  const nextIdx = zoomIn ? idx + 1 : idx - 1
+  if (nextIdx < 0 || nextIdx >= trendZoomWindows.length) return
+  if (trendWheelTimer) {
+    clearTimeout(trendWheelTimer)
+  }
+  trendWheelTimer = window.setTimeout(() => {
+    hoursRange.value = trendZoomWindows[nextIdx].minutes
+    fetchTrend()
+  }, 120)
+}
+
+const resetTrendZoom = () => {
+  if (hoursRange.value === 1440) return
+  hoursRange.value = 1440
+  fetchTrend()
+}
+
+const trendLabel = () => {
+  const win = trendZoomWindows.find(w => w.minutes === hoursRange.value)
+  return win ? win.label : '24 小时'
 }
 
 const renderChart = () => {
@@ -353,10 +457,21 @@ const renderChart = () => {
   const xData = trendData.value.map((item: any) => item.time)
   const yData = trendData.value.map((item: any) => item.count)
   
+  // 分钟级数据点多时自动旋转标签避免重叠
+  const isMinuteView = hoursRange.value < 60
+  const labelRotate = isMinuteView && xData.length > 30 ? 45 : 0
+  
   chart.setOption({
     tooltip: { trigger: 'axis' },
     grid: { left: '3%', right: '4%', bottom: '3%', containLabel: true },
-    xAxis: { type: 'category', data: xData },
+    xAxis: {
+      type: 'category',
+      data: xData,
+      axisLabel: {
+        rotate: labelRotate,
+        interval: isMinuteView && xData.length > 30 ? 'auto' : 0
+      }
+    },
     yAxis: { type: 'value' },
     series: [{
       data: yData,
@@ -366,8 +481,89 @@ const renderChart = () => {
       lineStyle: { color: '#87CEEB' },
       itemStyle: { color: '#87CEEB' }
     }]
-  })
+  }, true)
 }
+
+// ===== Token 消耗趋势 =====
+const tokenTrendHours = () => {
+  if (tokenTrendInterval.value !== 'hour') return { interval: 'hour', hours: 24, points: 24 }
+  if (tokenHoursRange.value < 60) return { interval: 'minute', minutes: tokenHoursRange.value, points: 24 }
+  return { interval: 'hour', hours: Math.floor(tokenHoursRange.value / 60), points: 24 }
+}
+
+const fetchTokenTrend = async () => {
+  try {
+    const params = tokenTrendHours()
+    const response = await axios.get('/admin/stats/token-trend', { params, headers })
+    tokenTrendData.value = response.data || []
+    renderTokenChart()
+  } catch (error) {
+    console.error('Failed to fetch token trend:', error)
+  }
+}
+
+const renderTokenChart = () => {
+  if (!tokenChartRef.value) return
+  if (!tokenChart) {
+    tokenChart = echarts.init(tokenChartRef.value)
+  }
+  const xData = tokenTrendData.value.map((item: any) => item.time)
+  const yData = tokenTrendData.value.map((item: any) => item.count)
+  const isMinuteView = tokenHoursRange.value < 60
+  const labelRotate = isMinuteView && xData.length > 30 ? 45 : 0
+  tokenChart.setOption({
+    tooltip: { trigger: 'axis' },
+    grid: { left: '3%', right: '4%', bottom: '3%', containLabel: true },
+    xAxis: {
+      type: 'category',
+      data: xData,
+      axisLabel: { rotate: labelRotate, interval: isMinuteView && xData.length > 30 ? 'auto' : 0 }
+    },
+    yAxis: { type: 'value' },
+    series: [{
+      data: yData,
+      type: 'line',
+      smooth: true,
+      areaStyle: { opacity: 0.3 },
+      lineStyle: { color: '#E6A23C' },
+      itemStyle: { color: '#E6A23C' }
+    }]
+  }, true)
+}
+
+const onTokenTrendWheel = (e: WheelEvent) => {
+  if (tokenTrendInterval.value !== 'hour') return
+  e.preventDefault()
+  const idx = trendZoomWindows.findIndex(w => w.minutes === tokenHoursRange.value)
+  if (idx === -1) return
+  const zoomIn = e.deltaY < 0
+  const nextIdx = zoomIn ? idx + 1 : idx - 1
+  if (nextIdx < 0 || nextIdx >= trendZoomWindows.length) return
+  if (tokenTrendWheelTimer) clearTimeout(tokenTrendWheelTimer)
+  tokenTrendWheelTimer = window.setTimeout(() => {
+    tokenHoursRange.value = trendZoomWindows[nextIdx].minutes
+    fetchTokenTrend()
+  }, 120)
+}
+
+const resetTokenTrendZoom = () => {
+  if (tokenHoursRange.value === 1440) return
+  tokenHoursRange.value = 1440
+  fetchTokenTrend()
+}
+
+const tokenTrendLabel = () => {
+  const win = trendZoomWindows.find(w => w.minutes === tokenHoursRange.value)
+  return win ? win.label : '24 小时'
+}
+
+const onTokenTrendIntervalChange = () => {
+  if (tokenTrendInterval.value !== 'hour' && tokenHoursRange.value < 1440) {
+    tokenHoursRange.value = 1440
+  }
+  fetchTokenTrend()
+}
+// ===== End Token 消耗趋势 =====
 
 const manualRefresh = async () => {
   await refreshLogsAndTrend()
@@ -395,6 +591,9 @@ const onRefreshIntervalChange = () => {
 }
 
 const onTrendIntervalChange = () => {
+  if (trendInterval.value !== 'hour' && hoursRange.value < 1440) {
+    hoursRange.value = 1440
+  }
   fetchTrend()
 }
 
@@ -407,14 +606,31 @@ onMounted(async () => {
   await fetchConfig()
   await fetchData()
   await fetchTrend()
+  await fetchTokenTrend()
   await nextTick()
   renderChart()
+  renderTokenChart()
   
-  window.addEventListener('resize', () => chart?.resize())
+  window.addEventListener('resize', () => {
+    chart?.resize()
+    tokenChart?.resize()
+  })
+  chartRef.value?.addEventListener('wheel', onTrendWheel)
+  tokenChartRef.value?.addEventListener('wheel', onTokenTrendWheel)
 })
 
 onUnmounted(() => {
   stopAutoRefresh()
+  if (trendWheelTimer) {
+    clearTimeout(trendWheelTimer)
+    trendWheelTimer = null
+  }
+  if (tokenTrendWheelTimer) {
+    clearTimeout(tokenTrendWheelTimer)
+    tokenTrendWheelTimer = null
+  }
+  chartRef.value?.removeEventListener('wheel', onTrendWheel)
+  tokenChartRef.value?.removeEventListener('wheel', onTokenTrendWheel)
 })
 </script>
 
@@ -425,25 +641,56 @@ onUnmounted(() => {
   align-items: center;
 }
 
-.dashboard :deep(.el-row) {
-  align-items: stretch;
+.card-header .header-right {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.zoom-hint {
+  font-size: 12px;
+  color: #909399;
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.trend-chart {
+  height: 300px;
+}
+
+.token-trend-card {
+  margin-top: 0;
+  flex-shrink: 0;
+}
+
+.token-trend-chart {
+  height: 200px;
+  min-height: 200px;
 }
 
 .dashboard :deep(.el-col) {
   display: flex;
+  flex-direction: column;
+  gap: 0;
 }
 
-.left-panel,
+.left-panel {
+  width: 100%;
+}
+
 .right-panel {
   width: 100%;
-  height: 100%;
+  flex: 1;
+  min-height: 0;
 }
 
 .right-panel :deep(.el-card__body) {
   display: flex;
   flex-direction: column;
-  padding: 10px;
-  height: calc(100% - 55px);
+  padding: 0;
+  flex: 1;
+  min-height: 0;
   overflow: hidden;
 }
 
