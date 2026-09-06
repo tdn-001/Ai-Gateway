@@ -22,7 +22,7 @@ FROM alpine:3.20
 RUN apk --no-cache add ca-certificates tzdata curl
 WORKDIR /app
 COPY --from=go-builder /app/ai-gateway .
-RUN mkdir -p /app/db
+RUN mkdir -p /app/data /app/db
 EXPOSE 3301
 HEALTHCHECK --interval=30s --timeout=10s --start-period=10s --retries=3 \
   CMD wget --no-verbose -O /dev/null http://localhost:3301/health || exit 1
