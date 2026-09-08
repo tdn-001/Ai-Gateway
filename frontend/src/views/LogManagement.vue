@@ -16,15 +16,15 @@
       </div>
     </div>
 
-    <el-row :gutter="16">
-      <el-col :span="12">
+    <el-row :gutter="isMobile ? 10 : 16">
+      <el-col :xs="24" :sm="24" :md="12">
         <el-card class="log-card">
           <template #header>
             <div class="card-header">
               <span>上游日志（客户端 → AI Gateway）</span>
             </div>
           </template>
-          <el-table :data="upstreamLogs" style="width: 100%" v-loading="loading" height="calc(100vh - 280px)">
+          <el-table :data="upstreamLogs" style="width: 100%" v-loading="loading" :height="isMobile ? 'auto' : 'calc(100vh - 280px)'">
             <el-table-column prop="request_id" label="请求ID" min-width="150" show-overflow-tooltip />
             <el-table-column prop="client_ip" label="IP" width="115" />
             <el-table-column label="位置" min-width="130">
@@ -53,14 +53,14 @@
         </el-card>
       </el-col>
 
-      <el-col :span="12">
+      <el-col :xs="24" :sm="24" :md="12">
         <el-card class="log-card">
           <template #header>
             <div class="card-header">
               <span>下游日志（AI Gateway → 上游）</span>
             </div>
           </template>
-          <el-table :data="logs" style="width: 100%" v-loading="loading" height="calc(100vh - 280px)">
+          <el-table :data="logs" style="width: 100%" v-loading="loading" :height="isMobile ? 'auto' : 'calc(100vh - 280px)'">
             <el-table-column prop="request_id" label="请求ID" min-width="150" show-overflow-tooltip />
             <el-table-column prop="request_time" label="时间" min-width="170" />
             <el-table-column prop="client_ip" label="IP" min-width="100" show-overflow-tooltip />
@@ -110,6 +110,9 @@
 import { ref, onMounted, onUnmounted } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import axios from 'axios'
+import { useResponsive } from '../composables/useResponsive'
+
+const { isMobile } = useResponsive()
 
 interface LogEntry {
   request_id: string
@@ -275,6 +278,8 @@ onUnmounted(() => {
 .header-actions {
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
+  gap: 4px;
 }
 
 .card-header {
@@ -284,10 +289,35 @@ onUnmounted(() => {
 
 .log-card :deep(.el-card__body) {
   padding: 10px;
+  overflow-x: auto;
 }
 
 .loading-text {
   color: #999;
   font-size: 12px;
+}
+
+@media (max-width: 768px) {
+  .page-header {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 12px;
+  }
+
+  .header-actions {
+    width: 100%;
+  }
+
+  .log-card :deep(.el-table) {
+    font-size: 12px;
+  }
+
+  .log-card :deep(.el-table__header th) {
+    padding: 6px 0;
+  }
+
+  .log-card :deep(.el-table__body td) {
+    padding: 6px 0;
+  }
 }
 </style>

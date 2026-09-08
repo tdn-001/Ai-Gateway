@@ -28,4 +28,13 @@ p {
   color: #909399;
   margin-bottom: 24px;
 }
+
+@media (max-width: 480px) {
+  h1 {
+    font-size: 48px;
+  }
+  p {
+    font-size: 14px;
+  }
+}
 </style>

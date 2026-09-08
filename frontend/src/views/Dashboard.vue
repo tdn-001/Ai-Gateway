@@ -1,7 +1,7 @@
 <template>
   <div class="dashboard">
-    <el-row :gutter="20">
-      <el-col :span="12">
+    <el-row :gutter="isMobile ? 10 : 20">
+      <el-col :xs="24" :sm="24" :md="12">
         <el-card class="left-panel">
           <template #header>
             <div class="card-header">
@@ -20,7 +20,7 @@
           
           <div class="config-section">
             <h4>当前配置</h4>
-            <el-descriptions :column="1" border size="small">
+            <el-descriptions :column="isMobile ? 1 : 1" border size="small">
               <el-descriptions-item label="模型地址">{{ activeNodeUrl }}</el-descriptions-item>
               <el-descriptions-item label="监听端口">{{ config.listen_port }}</el-descriptions-item>
               <el-descriptions-item label="应用请求超时">{{ config.client_timeout }}秒</el-descriptions-item>
@@ -45,39 +45,38 @@
           
           <div class="stats-section">
             <h4>系统统计</h4>
-            <el-row :gutter="16">
-              <el-col :span="3">
+            <el-row :gutter="isMobile ? 8 : 16">
+              <el-col :xs="8" :sm="8" :md="4">
                 <div class="stat-item">
                   <div class="stat-value">{{ stats.total_requests }}</div>
                   <div class="stat-label">总请求</div>
                 </div>
               </el-col>
-              <el-col :span="3">
+              <el-col :xs="8" :sm="8" :md="4">
                 <div class="stat-item">
                   <div class="stat-value highlight">{{ stats.today_requests }}</div>
                   <div class="stat-label">今日请求</div>
                 </div>
               </el-col>
-              <el-col :span="3">
+              <el-col :xs="8" :sm="8" :md="4">
                 <div class="stat-item">
                   <div class="stat-value">{{ stats.total_retries }}</div>
                   <div class="stat-label">总重试</div>
                 </div>
               </el-col>
-              <el-col :span="3">
+              <el-col :xs="8" :sm="8" :md="4">
                 <div class="stat-item">
                   <div class="stat-value highlight">{{ stats.today_retries }}</div>
                   <div class="stat-label">今日重试</div>
                 </div>
               </el-col>
-
-              <el-col :span="3">
+              <el-col :xs="8" :sm="8" :md="4">
                 <div class="stat-item">
                   <div class="stat-value">{{ stats.total_tokens || 0 }}</div>
                   <div class="stat-label">总Token</div>
                 </div>
               </el-col>
-              <el-col :span="3">
+              <el-col :xs="8" :sm="8" :md="4">
                 <div class="stat-item">
                   <div class="stat-value highlight">{{ stats.today_tokens || 0 }}</div>
                   <div class="stat-label">今日Token</div>
@@ -105,7 +104,7 @@
         </el-card>
       </el-col>
       
-      <el-col :span="12">
+      <el-col :xs="24" :sm="24" :md="12">
         <el-card class="right-panel">
           <template #header>
             <div class="card-header">
@@ -215,6 +214,9 @@ import { ref, onMounted, onUnmounted, nextTick } from 'vue'
 import { ElMessage } from 'element-plus'
 import axios from 'axios'
 import * as echarts from 'echarts'
+import { useResponsive } from '../composables/useResponsive'
+
+const { isMobile } = useResponsive()
 
 const config = ref({
   listen_port: '3301',
@@ -749,5 +751,42 @@ onUnmounted(() => {
   cursor: help;
   margin-left: 4px;
   line-height: 1;
+}
+
+@media (max-width: 768px) {
+  .trend-chart {
+    height: 200px;
+  }
+
+  .token-trend-chart {
+    height: 150px;
+    min-height: 150px;
+  }
+
+  .stat-value {
+    font-size: 16px;
+  }
+
+  .stat-label {
+    font-size: 10px;
+  }
+
+  .gateway-url {
+    flex-wrap: wrap;
+  }
+
+  .card-header {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 8px;
+  }
+
+  .card-header .header-right {
+    flex-wrap: wrap;
+  }
+
+  :deep(.el-card__header) {
+    padding: 12px;
+  }
 }
 </style>

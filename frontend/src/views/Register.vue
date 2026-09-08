@@ -127,11 +127,28 @@ const handleRegister = async () => {
 }
 
 .login-card {
-  width: 400px;
+  width: 100%;
+  max-width: 400px;
   padding: 40px;
   background: white;
   border-radius: 12px;
   box-shadow: 0 10px 30px rgba(0, 0, 0, 0.1);
+}
+
+@media (max-width: 480px) {
+  .login-card {
+    margin: 16px;
+    padding: 24px;
+  }
+
+  .login-header h1 {
+    font-size: 24px;
+  }
+
+  .logo {
+    width: 60px;
+    height: 60px;
+  }
 }
 
 .login-header {

@@ -87,7 +87,7 @@
     <el-empty v-if="nodes.length === 0" description="暂无模型节点" />
 
     <!-- 新增/编辑节点对话框 -->
-    <el-dialog v-model="nodeDialogVisible" :title="isEditingNode ? '编辑节点' : '新增节点'" width="480px">
+    <el-dialog v-model="nodeDialogVisible" :title="isEditingNode ? '编辑节点' : '新增节点'" :width="isMobile ? '95%' : '480px'">
       <el-form label-width="80px">
         <el-form-item label="名称">
           <el-input v-model="nodeForm.name" placeholder="如：FreeLLM主节点" />
@@ -103,7 +103,7 @@
     </el-dialog>
 
     <!-- 添加 Key 对话框 -->
-    <el-dialog v-model="keyDialogVisible" title="添加 Key" width="480px">
+    <el-dialog v-model="keyDialogVisible" title="添加 Key" :width="isMobile ? '95%' : '480px'">
       <el-form label-width="80px">
         <el-form-item label="名称">
           <el-input v-model="keyForm.name" placeholder="如：主Key" />
@@ -125,6 +125,9 @@ import { ref, onMounted } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { View, Hide, CopyDocument } from '@element-plus/icons-vue'
 import axios from 'axios'
+import { useResponsive } from '../composables/useResponsive'
+
+const { isMobile } = useResponsive()
 
 interface ModelKey {
   key: string
@@ -344,5 +347,35 @@ onMounted(() => {
 .node-actions {
   display: flex;
   gap: 8px;
+}
+
+@media (max-width: 768px) {
+  .page-header {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 12px;
+  }
+
+  .node-header {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 12px;
+  }
+
+  .node-title {
+    flex-wrap: wrap;
+  }
+
+  .node-name {
+    font-size: 14px;
+  }
+
+  .node-actions {
+    width: 100%;
+  }
+
+  .node-actions .el-button {
+    flex: 1;
+  }
 }
 </style>

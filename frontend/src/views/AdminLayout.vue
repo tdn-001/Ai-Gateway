@@ -1,7 +1,8 @@
 <template>
   <div class="admin-layout">
     <el-container>
-      <el-aside width="200px" class="admin-sidebar">
+      <!-- 桌面端侧边栏 -->
+      <el-aside v-if="!isMobile" width="200px" class="admin-sidebar">
         <div class="sidebar-header">
           <img src="/logo.png" alt="Logo" class="sidebar-logo" />
           <h2>AI Gateway</h2>
@@ -36,26 +37,76 @@
           </el-menu-item>
         </el-menu>
       </el-aside>
-      
+
       <el-container>
         <el-header class="admin-header">
           <div class="header-left">
+            <el-button v-if="isMobile" class="hamburger-btn" text @click="drawerVisible = true">
+              <el-icon :size="20"><Fold /></el-icon>
+            </el-button>
             <el-breadcrumb separator="/">
               <el-breadcrumb-item :to="{ path: '/admin' }">首页</el-breadcrumb-item>
               <el-breadcrumb-item v-if="currentRoute">{{ currentRoute }}</el-breadcrumb-item>
             </el-breadcrumb>
           </div>
           <div class="header-right">
-            <span class="user-greeting">欢迎您，{{ username }}</span>
+            <span v-if="!isMobile" class="user-greeting">欢迎您，{{ username }}</span>
+            <span v-else class="user-greeting">{{ username }}</span>
             <el-button type="danger" size="small" @click="handleLogout">退出登录</el-button>
           </div>
         </el-header>
-        
+
         <el-main class="admin-main">
           <router-view />
         </el-main>
       </el-container>
     </el-container>
+
+    <!-- 移动端侧边栏抽屉 -->
+    <el-drawer
+      v-model="drawerVisible"
+      direction="ltr"
+      :size="220"
+      :show-close="false"
+      class="mobile-drawer"
+    >
+      <template #header>
+        <div class="drawer-header">
+          <img src="/logo.png" alt="Logo" class="sidebar-logo" />
+          <h2>AI Gateway</h2>
+        </div>
+      </template>
+      <el-menu
+        :default-active="activeMenu"
+        class="drawer-menu"
+        background-color="#87CEEB"
+        text-color="#fff"
+        active-text-color="#fff"
+        router
+        @select="drawerVisible = false"
+      >
+        <el-menu-item index="/admin">
+          <el-icon><HomeFilled /></el-icon>
+          <span>首页</span>
+        </el-menu-item>
+        <el-menu-item index="/admin/management">
+          <el-icon><Setting /></el-icon>
+          <span>管理</span>
+        </el-menu-item>
+        <el-menu-item index="/admin/apikeys">
+          <el-icon><Key /></el-icon>
+          <span>API Keys</span>
+        </el-menu-item>
+        <el-menu-item index="/admin/modelkeys">
+          <el-icon><Connection /></el-icon>
+          <span>模型节点</span>
+        </el-menu-item>
+        <el-menu-item index="/admin/logs">
+          <el-icon><List /></el-icon>
+          <span>日志管理</span>
+        </el-menu-item>
+      </el-menu>
+    </el-drawer>
   </div>
 </template>
 
@@ -63,11 +114,14 @@
 import { ref, computed, onMounted } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import { ElMessage } from 'element-plus'
-import { HomeFilled, Setting, List, Key, Connection } from '@element-plus/icons-vue'
+import { HomeFilled, Setting, List, Key, Connection, Fold } from '@element-plus/icons-vue'
+import { useResponsive } from '../composables/useResponsive'
 
 const router = useRouter()
 const route = useRoute()
 const username = ref('')
+const { isMobile } = useResponsive()
+const drawerVisible = ref(false)
 
 const parseUsernameFromToken = (): string => {
   const token = localStorage.getItem('token')
@@ -164,6 +218,13 @@ onMounted(() => {
 
 .header-left {
   flex: 1;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.hamburger-btn {
+  padding: 4px;
 }
 
 .header-right {
@@ -191,5 +252,41 @@ onMounted(() => {
 .admin-main {
   background: #f5f7fa;
   padding: 20px;
+}
+
+.drawer-header {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.drawer-header .sidebar-logo {
+  width: 36px;
+  height: 36px;
+  margin-bottom: 0;
+}
+
+.drawer-header h2 {
+  font-size: 16px;
+}
+
+:deep(.mobile-drawer .el-drawer__body) {
+  padding: 0;
+  background-color: #87CEEB;
+}
+
+.drawer-menu {
+  width: 100% !important;
+  border-right: none;
+}
+
+@media (max-width: 768px) {
+  .admin-header {
+    padding: 0 12px;
+  }
+
+  .admin-main {
+    padding: 12px;
+  }
 }
 </style>

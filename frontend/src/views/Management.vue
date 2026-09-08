@@ -111,7 +111,7 @@
       </div>
     </div>
 
-    <el-dialog v-model="dialogVisible" :title="isEditing ? '编辑提示词' : '新增提示词'" width="600px">
+    <el-dialog v-model="dialogVisible" :title="isEditing ? '编辑提示词' : '新增提示词'" :width="isMobile ? '95%' : '600px'">
       <el-form :model="currentPrompt" label-width="80px">
         <el-form-item label="模式">
           <el-select v-model="currentPrompt.mode" :disabled="isEditing">
@@ -141,6 +141,9 @@
 import { ref, onMounted } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import axios from 'axios'
+import { useResponsive } from '../composables/useResponsive'
+
+const { isMobile } = useResponsive()
 
 const config = ref<any>({
   listen_port: '3301',
@@ -329,6 +332,8 @@ const deletePrompt = async (id: string) => {
 .toolbar {
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
   margin-bottom: 16px;
 }
 .prompt-tabs {
@@ -372,6 +377,17 @@ const deletePrompt = async (id: string) => {
   grid-template-columns: repeat(4, 1fr);
   gap: 4px 12px;
 }
+
+.status-code-checkboxes :deep(.el-checkbox) {
+  min-width: 0;
+  overflow: hidden;
+}
+
+.status-code-checkboxes :deep(.el-checkbox__label) {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 .help-icon {
   display: inline-flex;
   align-items: center;
@@ -386,5 +402,71 @@ const deletePrompt = async (id: string) => {
   cursor: help;
   margin-left: 4px;
   line-height: 1;
+}
+
+@media (max-width: 1100px) and (min-width: 769px) {
+  .status-code-checkboxes {
+    grid-template-columns: repeat(3, 1fr);
+  }
+}
+
+@media (max-width: 768px) {
+  .management {
+    padding: 12px;
+    overflow-x: hidden;
+  }
+
+  .section {
+    padding: 14px;
+    overflow: hidden;
+  }
+
+  .form-grid {
+    grid-template-columns: 1fr;
+    overflow: hidden;
+  }
+
+  .form-group :deep(.el-input),
+  .form-group :deep(.el-select) {
+    width: 100% !important;
+    max-width: 100%;
+  }
+
+  .form-group :deep(.el-input-number) {
+    width: 100% !important;
+    max-width: 100%;
+  }
+
+  .form-group :deep(.el-input-number .el-input__wrapper) {
+    width: 100%;
+  }
+
+  .form-group :deep(.el-input-number .el-input__inner) {
+    width: 100%;
+    min-width: 0;
+  }
+
+  .status-codes-group {
+    overflow: hidden;
+  }
+
+  .status-code-checkboxes {
+    grid-template-columns: 1fr;
+    gap: 8px;
+  }
+
+  .status-code-checkboxes :deep(.el-checkbox) {
+    margin-right: 0;
+  }
+
+  .toolbar {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+
+  .toolbar .el-select {
+    width: 100% !important;
+    margin-right: 0 !important;
+  }
 }
 </style>

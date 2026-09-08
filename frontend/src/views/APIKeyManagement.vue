@@ -48,7 +48,7 @@
       </el-table>
     </el-card>
     
-    <el-dialog v-model="dialogVisible" title="新增 API Key" width="400px">
+    <el-dialog v-model="dialogVisible" title="新增 API Key" :width="isMobile ? '95%' : '400px'">
       <el-form label-width="100px">
         <el-form-item label="名称">
           <el-input v-model="keyName" placeholder="请输入Key名称" />
@@ -63,7 +63,7 @@
       </template>
     </el-dialog>
     
-    <el-dialog v-model="usageLogVisible" title="调用记录" width="800px">
+    <el-dialog v-model="usageLogVisible" title="调用记录" :width="isMobile ? '95%' : '800px'">
       <el-table :data="usageLogs" style="width: 100%" max-height="400">
         <el-table-column prop="request_id" label="请求ID" width="180" />
         <el-table-column prop="client_ip" label="客户端IP" width="120" />
@@ -94,6 +94,9 @@ import { ref, onMounted } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { View, Hide, CopyDocument } from '@element-plus/icons-vue'
 import axios from 'axios'
+import { useResponsive } from '../composables/useResponsive'
+
+const { isMobile } = useResponsive()
 
 interface APIKey {
   key: string
@@ -248,5 +251,13 @@ onMounted(() => {
 .el-pagination {
   margin-top: 16px;
   justify-content: flex-end;
+}
+
+@media (max-width: 768px) {
+  .page-header {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 12px;
+  }
 }
 </style>
